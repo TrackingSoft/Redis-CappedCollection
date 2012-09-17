@@ -5,6 +5,7 @@ MANIFEST                            This file
 Makefile.PL                         Makefile generator
 README                              Get you started with this package
 lib/Redis/CappedCollection.pm       Object interface for the fixed sized collections that have a auto-FIFO age-out feature
+benchmark_capped.pl                 Redis::CappedCollection benchmark
 example.pl                          Redis::CappedCollection demonstration
 t/00_compile.t
 t/00_CappedCollection/00_compile.t

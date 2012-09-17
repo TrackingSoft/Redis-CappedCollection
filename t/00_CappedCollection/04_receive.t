@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -106,10 +108,19 @@ for ( my $i = 1; $i <= 10; ++$i )
     $tmp = $coll->receive( 1, $i - 1 );
     is $tmp, $i.'', "correct receive";
 }
-@arr = $coll->receive( 1, 123 );
-is scalar( @arr ), 0, "empty list";
+$tmp = $coll->receive( 1, 123 );
+ok !defined( $tmp ), "empty list";
 $tmp = $coll->receive( 1 );
 is $tmp, 10, "correct list len";
+
+$coll = Redis::CappedCollection->new(
+    $redis,
+    );
+$coll->insert( $_, "Some id" ) for 1..10;
+@arr = ();
+push @arr, ( $_ - 1, $_ ) for 1..10;
+my @ret = $coll->receive( "Some id", '' );
+is "@arr", "@ret", "correct receive";
 
 # errors in the arguments
 
@@ -118,6 +129,11 @@ dies_ok { $coll->receive() } "expecting to die - no args";
 foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll->receive( $arg ) } "expecting to die: ".( $arg || '' );
+}
+
+foreach my $arg ( ( \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll->receive( 1, $arg ) } "expecting to die: ".( $arg || '' );
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );

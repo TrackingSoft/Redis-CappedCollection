@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [] )
@@ -97,10 +99,14 @@ sub new_connect {
 
 $name = '';
 new_connect();
-
 is bytes::length( $coll->name ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
+$tmp = $coll->drop;
+is $tmp, 1, "correct";
 
-$coll->drop;
+new_connect();
+$coll->insert( '*');
+$tmp = $coll->drop;
+is $tmp, 5, "correct";
 
 $name = $msg;
 new_connect();

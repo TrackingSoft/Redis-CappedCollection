@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -94,6 +96,20 @@ for ( my $i = 1; $i <= 10; ++$i )
     my @keys = $coll->lists;
     @keys = sort @keys;
     is "@arr", "@keys", "correct lists";
+}
+
+my @keys = $coll->lists( '1' );
+is "@keys", "1", "correct lists";
+@keys = $coll->lists( '1?' );
+is "@keys", "10", "correct lists";
+@keys = $coll->lists( '2?' );
+is "@keys", "", "correct lists";
+
+foreach my $arg ( ( "", \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll->lists(
+        $arg,
+        ) } "expecting to die: ".( $arg || '' );
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );

@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -59,7 +61,7 @@ SKIP: {
 # For Test::RedisServer
 $real_redis->quit;
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $size, $older_allowed );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -78,6 +80,8 @@ sub new_connect {
 
     $coll = Redis::CappedCollection->new(
         $redis,
+        $size ? ( size  => $size ) : (),
+        older_allowed   => $older_allowed,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
 
@@ -92,6 +96,8 @@ sub new_connect {
 
 $maxmemory = 0;
 $policy = "noeviction";
+$size = 0;
+$older_allowed = 1;
 new_connect();
 
 #-- all correct
@@ -181,29 +187,7 @@ SKIP:
 #    $policy = "volatile-ttl";       # -> remove the key with the nearest expire time (minor TTL)
 #    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
 
-    $maxmemory = 2 * 1024 * 1024;
-    {
-        new_connect();
-        my ( undef, $max_datasize ) = $coll->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
-        is $max_datasize, $maxmemory, "value is set correctly";
-
-        $tmp = '*' x ( 1024 * 3 );
-
-        eval { $id = $coll->insert( $tmp, $_ ) } for ( 1..1024 );
-
-        eval {
-            while ( @arr = $coll->pop_oldest )
-            {
-                ;
-            }
-        };
-        redo unless $coll->last_errorcode == EMAXMEMORYPOLICY;
-        ok $@, "exception";
-        is $coll->last_errorcode, EMAXMEMORYPOLICY, "EMAXMEMORYPOLICY";
-        note '$@: ', $@;
-
-        $coll->drop;
-    }
+    dies_ok { new_connect() } "expecting to die: EMAXMEMORYPOLICY";
 }
 
 #-- ECOLLDELETED
@@ -215,42 +199,62 @@ SKIP:
 #    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
 #    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
 #    $policy = "volatile-random";    # -> remove a random key with an expire set
-    $policy = "allkeys-random";     # -> remove a random key, any key
+#    $policy = "allkeys-random";     # -> remove a random key, any key
 #    $policy = "volatile-ttl";       # -> remove the key with the nearest expire time (minor TTL)
-#    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
+    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
 
-    $maxmemory = 2 * 1024 * 1024;
-    {
-        new_connect();
-        $status_key  = NAMESPACE.':status:'.$coll->name;
-        my ( undef, $max_datasize ) = $coll->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
-        is $max_datasize, $maxmemory, "value is set correctly";
+    new_connect();
+    $status_key  = NAMESPACE.':status:'.$coll->name;
 
-        $tmp = '*' x ( 1024 * 3 );
-
-        eval { $id = $coll->insert( $tmp, $_ ) } for ( 1..1024 );
-
-        $coll->_call_redis( 'DEL', $status_key );
-
-        eval {
-            while ( @arr = $coll->pop_oldest )
-            {
-                ;
-            }
-        };
-        redo unless $coll->last_errorcode == ECOLLDELETED;
-        ok $@, "exception";
-        is $coll->last_errorcode, ECOLLDELETED, "ECOLLDELETED";
-        note '$@: ', $@;
-
-        $coll->drop;
-    }
+    $id = $coll->insert( '*' x 1024 );
+    $coll->_call_redis( 'DEL', $status_key );
+    eval { $id = $coll->insert( '*' x 1024 ) };
+    ok $@, "exception";
+    is $coll->last_errorcode, ECOLLDELETED, "ECOLLDELETED";
+    note '$@: ', $@;
+    $coll->drop;
 }
 
 #-- EREDIS
 
 eval { $coll->_call_redis( "BADTHING", "Anything" ) };
 is $coll->last_errorcode, EREDIS, "EREDIS";
+note '$@: ', $@;
+
+#-- EDATAIDEXISTS
+
+new_connect();
+$id = $coll->insert( '*' x 1024, "Some id", 123 );
+eval { $id = $coll->insert( '*' x 1024, "Some id", 123 ) };
+is $coll->last_errorcode, EDATAIDEXISTS, "EDATAIDEXISTS";
+note '$@: ', $@;
+
+#-- EOLDERTHANALLOWED
+
+$size = 5;
+new_connect();
+
+$list_key = NAMESPACE.':D:*';
+foreach my $i ( 1..( $coll->size * 2 ) )
+{
+    $id = $coll->insert( $i, "Some id", $i, $i );
+}
+eval { $id = $coll->insert( '*', "Some id", 123, 1 ) };
+is $coll->last_errorcode, ENOERROR, "ENOERROR";
+note '$@: ', $@;
+
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+
+$older_allowed = 0;
+new_connect();
+
+$list_key = NAMESPACE.':D:*';
+foreach my $i ( 1..( $coll->size * 2 ) )
+{
+    $id = $coll->insert( $i, "Some id", $i, $i );
+}
+eval { $id = $coll->insert( '*', "Some id", 123, 1 ) };
+is $coll->last_errorcode, EOLDERTHANALLOWED, "EOLDERTHANALLOWED";
 note '$@: ', $@;
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );

@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )

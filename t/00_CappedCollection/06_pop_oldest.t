@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -82,6 +84,8 @@ ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 #-- all correct
+@arr = $coll->pop_oldest;
+is scalar( @arr ), 0, "empty array";
 
 # some inserts
 $len = 0;
@@ -93,7 +97,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 @arr = $coll->validate;
 is $arr[0], $tmp,   "OK length - $arr[0]";
 is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+is $arr[2], $len,   "OK items - $arr[2]";
 
 for ( my $i = 1; $i <= 10; ++$i )
 {
@@ -103,10 +107,17 @@ for ( my $i = 1; $i <= 10; ++$i )
         is $arr[0], $i,    "correct id";
         is $arr[1], $j.'', "correct data";
         my $data = $arr[1];
-        @arr = $coll->validate;
-        is $arr[0], ( $tmp -= bytes::length( $data ) ), "OK length";
-        is $arr[1], 10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
-        is $arr[2], --$len,                             "OK queue length";
+        eval { @arr = $coll->validate; };
+        if ( $@ )
+        {
+            ok( ( $coll->last_errorcode == ECOLLDELETED and $i == 10 and $j == 10 ), "expecting to die" );
+        }
+        else
+        {
+            is $arr[0], ( $tmp -= bytes::length( $data ) ), "OK length";
+            is $arr[1], 10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
+            is $arr[2], --$len,                             "OK items";
+        }
     }
 }
 

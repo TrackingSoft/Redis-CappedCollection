@@ -22,6 +22,8 @@ our @EXPORT_OK  = qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 #-- load the modules -----------------------------------------------------------
@@ -32,9 +34,10 @@ use Mouse::Util::TypeConstraints;
 use Carp;
 use Redis;
 use Data::UUID;
+use Time::HiRes     qw( gettimeofday );
 use Digest::SHA1    qw( sha1_hex );
 use List::Util      qw( min );
-use Params::Util    qw( _NONNEGINT _STRING _INSTANCE );
+use Params::Util    qw( _NONNEGINT _STRING _INSTANCE _NUMBER );
 
 #-- declarations ---------------------------------------------------------------
 
@@ -53,6 +56,8 @@ use constant {
     EMAXMEMORYPOLICY    => 5,
     ECOLLDELETED        => 6,
     EREDIS              => 7,
+    EDATAIDEXISTS       => 8,
+    EOLDERTHANALLOWED   => 9,
     };
 
 my @ERROR = (
@@ -61,169 +66,284 @@ my @ERROR = (
     'Data is too large',
     'Error in connection to Redis server',
     "Command not allowed when used memory > 'maxmemory'",
-    'Data was removed by maxmemory-policy',
+    'Data may be removed by maxmemory-policy all*',
     'Collection was removed prior to use',
     'Redis error message',
+    'Attempt to add data to an existing ID',
+    'Attempt to add data over outdated',
     );
 
 my $uuid = new Data::UUID;
 
 my %lua_script_body;
-
-$lua_script_body{insert} =
-<<"INSERT" ;
-local queue_key     = KEYS[1]
-local status_key    = KEYS[2]
-local list_key      = KEYS[3]
-local excess_lists  = KEYS[4]
-local id            = ARGV[1]
-local size          = ARGV[2] + 0
-local data          = ARGV[3]
-local size_garbage  = ARGV[4] + 0
-local status_exist  = redis.call( 'EXISTS', status_key )
-local list_exist    = redis.call( 'EXISTS', list_key )
-local data_index    = 0
-if status_exist == 1 then
-    if size > 0 then
-        if ( redis.call( 'HGET', status_key, 'length' ) + #data ) > size then
+my $_lua_cleaning = <<"END_CLEANING";
+        if redis.call( 'HGET', status_key, 'length' ) + size_delta > size then
             local size_limit = size - size_garbage
-            while ( redis.call( 'HGET', status_key, 'length' ) + #data ) > size_limit do
-                local excess_id = redis.call( 'LPOP', queue_key )
-                local excess_list_key = excess_lists..':'..excess_id
-                local excess_data = redis.call( 'LPOP', excess_list_key )
-                local new_excess_list_exist = redis.call( 'EXISTS', excess_list_key )
-                if new_excess_list_exist == 0 then
-                    redis.call( 'HINCRBY', status_key, 'lists', -1 )
+            while redis.call( 'EXISTS', status_key ) and redis.call( 'HGET', status_key, 'length' ) + size_delta > size_limit do
+                local vals              = redis.call( 'ZRANGE', queue_key, 0, 0 )
+                local excess_list_id    = vals[1]
+                local excess_info_key   = info_keys..':'..excess_list_id
+                local excess_data_key   = data_keys..':'..excess_list_id
+                local excess_time_key   = time_keys..':'..excess_list_id
+                local excess_data_id    = redis.call( 'HGET', excess_info_key, 'oldest_data_id' )
+                local excess_data       = redis.call( 'HGET', excess_data_key, excess_data_id )
+                local excess_data_len   = #excess_data
+                local excess_data_time  = redis.call( 'ZSCORE', excess_time_key, excess_data_id )
+                redis.call( 'HDEL',     excess_data_key, excess_data_id )
+                redis.call( 'HSET',     excess_info_key, 'last_removed_time', excess_data_time )
+                redis.call( 'HINCRBY',  status_key, 'items', -1 )
+                if redis.call( 'EXISTS', excess_data_key ) == 1 then
+                    redis.call( 'ZREM',     excess_time_key, excess_data_id )
+                    vals                    = redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )
+                    local oldest_data_id    = vals[1]
+                    local oldest_time       = vals[2]
+                    redis.call( 'HMSET',    excess_info_key, 'oldest_time', oldest_time, 'oldest_data_id', oldest_data_id )
+                    redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
+                else
+                    redis.call( 'DEL',      excess_info_key, excess_time_key )
+                    redis.call( 'HINCRBY',  status_key, 'lists', -1 )
+                    redis.call( 'ZREM',     queue_key, excess_list_id )
                 end
-                if #excess_data > 0 then
-                    redis.call( 'HINCRBY', status_key, 'length', -#excess_data )
+                redis.call( 'HINCRBY', status_key, 'length', -excess_data_len )
+            end
+            list_exist = redis.call( 'EXISTS', data_key )
+        end
+END_CLEANING
+
+my $_lua_namespace  = "local namespace  = '".NAMESPACE."'";
+my $_lua_queue_key  = "local queue_key  = namespace..':queue:'..coll_name";
+my $_lua_status_key = "local status_key = namespace..':status:'..coll_name";
+my $_lua_info_keys  = "local info_keys  = namespace..':I:'..coll_name";
+my $_lua_data_keys  = "local data_keys  = namespace..':D:'..coll_name";
+my $_lua_time_keys  = "local time_keys  = namespace..':T:'..coll_name";
+my $_lua_info_key   = "local info_key   = info_keys..':'..list_id";
+my $_lua_data_key   = "local data_key   = data_keys..':'..list_id";
+my $_lua_time_key   = "local time_key   = time_keys..':'..list_id";
+
+$lua_script_body{insert} = <<"END_INSERT";
+local coll_name         = ARGV[1]
+local size_garbage      = ARGV[2] + 0
+local list_id           = ARGV[3]
+local data_id           = ARGV[4]
+local data              = ARGV[5]
+local data_time         = ARGV[6] + 0
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+$_lua_info_keys
+$_lua_data_keys
+$_lua_time_keys
+$_lua_info_key
+$_lua_data_key
+$_lua_time_key
+local status_exist      = redis.call( 'EXISTS', status_key )
+local list_exist        = redis.call( 'EXISTS', data_key )
+local error             = 0
+local result_data_id    = 0
+if status_exist == 1 then
+    local data_len      = #data
+    local size_delta    = data_len
+    local size          = redis.call( 'HGET', status_key, 'size' ) + 0
+    if size > 0 then
+        $_lua_cleaning
+    end
+    if data_id == '' then
+        if list_exist ~= 0 then
+            result_data_id = redis.call( 'HGET', info_key, 'next_data_id' )
+        end
+    else
+        result_data_id = data_id
+    end
+    if redis.call( 'HEXISTS', data_key, result_data_id ) == 1 then
+        error = 8               -- EDATAIDEXISTS
+    end
+    if error == 0 then
+        if redis.call( 'HGET', status_key, 'older_allowed' ) ~= '1' then
+            if list_exist ~= 0 then
+                local last_removed_time = redis.call( 'HGET', info_key, 'last_removed_time' ) + 0
+                if last_removed_time > 0 and data_time <= last_removed_time then
+                    error = 9   -- EOLDERTHANALLOWED
                 end
             end
         end
-    end
-    if list_exist == 0 then
-        redis.call( 'HINCRBY', status_key, 'lists', 1 )
-    end
-    if #data > 0 then
-        redis.call( 'HINCRBY', status_key, 'length', #data );
-    end
-    data_index = redis.call( 'RPUSH', list_key, data ) - 1;
-    redis.call( 'RPUSH', queue_key, id );
-end
-return { status_exist, data_index }
-INSERT
-
-$lua_script_body{update} =
-<<"UPDATE" ;
-local queue_key     = KEYS[1]
-local status_key    = KEYS[2]
-local list_key      = KEYS[3]
-local excess_lists  = KEYS[4]
-local size          = ARGV[1] + 0
-local index         = ARGV[2] + 0
-local data          = ARGV[3]
-local size_garbage  = ARGV[4] + 0
-local status_exist  = redis.call( 'EXISTS', status_key )
-local list_exist    = redis.call( 'EXISTS', list_key )
-local ret           = false
-if status_exist == 1 then
-    if list_exist == 1 then
-        if index < redis.call( 'LLEN', list_key ) then
-            local cur_data = redis.call( 'LINDEX', list_key, index )
-            if size > 0 then
-                local size_delta = #data - #cur_data
-                if ( redis.call( 'HGET', status_key, 'length' ) + size_delta ) > size then
-                    local size_limit = size - size_garbage
-                    while ( redis.call( 'HGET', status_key, 'length' ) + size_delta ) > size_limit do
-                        local excess_id         = redis.call( 'LPOP', queue_key )
-                        local excess_list_key   = excess_lists..':'..excess_id
-                        local excess_data       = redis.call( 'LPOP', excess_list_key )
-                        if excess_list_key == list_key then
-                            index = index - 1
-                        end
-                        local new_excess_list_exist = redis.call( 'EXISTS', excess_list_key )
-                        if new_excess_list_exist == 0 then
-                            redis.call( 'HINCRBY', status_key, 'lists', -1 )
-                        end
-                        if #excess_data > 0 then
-                            redis.call( 'HINCRBY', status_key, 'length', -#excess_data )
-                        end
-                    end
-                end
+        if error == 0 then
+            if list_exist == 0 then
+                redis.call( 'HMSET',    info_key, 'next_data_id', 0, 'last_removed_time', 0, 'oldest_time', 0, 'oldest_data_id', '' )
+                redis.call( 'HINCRBY',  status_key, 'lists', 1 )
             end
-            if index >= 0 then
-                ret = redis.call( 'LSET', list_key, index, data )
-                if ret then
-                    redis.call( 'HINCRBY', status_key, 'length', #data - #cur_data );
+                if data_id == '' then
+                    redis.call( 'HINCRBY', info_key, 'next_data_id', 1 )
                 end
+            redis.call( 'HINCRBY', status_key, 'length', data_len )
+            if redis.call( 'HEXISTS', status_key, 'size' ) == 0 then
+                redis.call( 'HMSET', status_key, 'size', size, 'items', 0 )
+            end
+            redis.call( 'HSET',     data_key, result_data_id, data )
+            redis.call( 'HINCRBY',  status_key, 'items', 1 )
+            redis.call( 'ZADD',     time_key, data_time, result_data_id )
+            local oldest_time       = redis.call( 'HGET', info_key, 'oldest_time' ) + 0
+            if data_time < oldest_time or oldest_time == 0 then
+                redis.call( 'HMSET', info_key, 'oldest_time', data_time, 'oldest_data_id', result_data_id )
+                if redis.call( 'HEXISTS', info_key, 'next_data_id' ) == 0 then
+                        redis.call( 'HSET', info_key, 'next_data_id', 0 )
+                end
+                redis.call( 'ZADD', queue_key, data_time, list_id )
+            end
+        end
+    end
+end
+return { error, status_exist, result_data_id }
+END_INSERT
+
+$lua_script_body{update} = <<"END_UPDATE";
+local coll_name     = ARGV[1]
+local size_garbage  = ARGV[2] + 0
+local list_id       = ARGV[3]
+local data_id       = ARGV[4]
+local data          = ARGV[5]
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+$_lua_info_keys
+$_lua_data_keys
+$_lua_time_keys
+$_lua_info_key
+$_lua_data_key
+$_lua_time_key
+local status_exist  = redis.call( 'EXISTS', status_key )
+local list_exist    = redis.call( 'EXISTS', data_key )
+local error         = 0
+local ret           = 0
+if status_exist == 1 then
+    if redis.call( 'HEXISTS', data_key, data_id ) == 1 then
+        local data_len      = #data
+        local cur_data      = redis.call( 'HGET', data_key, data_id )
+        local cur_data_len  = #cur_data
+        local size_delta    = data_len - cur_data_len
+        local size          = redis.call( 'HGET', status_key, 'size' ) + 0
+        if size > 0 then
+            $_lua_cleaning
+        end
+        if list_exist ~= 0 and redis.call( 'HEXISTS', data_key, data_id ) == 1 then
+            ret = redis.call( 'HSET', data_key, data_id, data )
+            if ret == 0 then
+                redis.call( 'HINCRBY', status_key, 'length', size_delta )
+                ret = 1
+            else
+                ret = 0
             end
         end
     end
 end
 return { status_exist, ret }
-UPDATE
+END_UPDATE
 
-$lua_script_body{pop_oldest} =
-<<"POP_OLDEST" ;
-local queue_key         = KEYS[1]
-local status_key        = KEYS[2]
-local excess_lists      = KEYS[3]
-local queue_exist       = redis.call( 'EXISTS', queue_key )
+$lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
+local coll_name         = ARGV[1]
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+$_lua_info_keys
+$_lua_data_keys
+$_lua_time_keys
 local status_exist      = redis.call( 'EXISTS', status_key )
+local queue_exist       = redis.call( 'EXISTS', queue_key )
 local excess_list_exist = 0
-local excess_id         = false
+local excess_list_id    = false
 local excess_data       = false
 if queue_exist == 1 and status_exist == 1 then
-    excess_id               = redis.call( 'LPOP', queue_key )
-    local excess_list_key   = excess_lists..':'..excess_id
-    excess_list_exist       = redis.call( 'EXISTS', excess_list_key )
-    if excess_list_exist == 1 then
-        excess_data = redis.call( 'LPOP', excess_list_key )
-        local new_excess_list_exist = redis.call( 'EXISTS', excess_list_key )
-        if new_excess_list_exist == 0 then
-            redis.call( 'HINCRBY', status_key, 'lists', -1 )
-        end
-        redis.call( 'HINCRBY', status_key, 'length', -#excess_data )
+    excess_list_id          = redis.call( 'ZRANGE', queue_key, 0, 0 )[1]
+    local excess_info_key   = info_keys..':'..excess_list_id
+    local excess_data_key   = data_keys..':'..excess_list_id
+    local excess_time_key   = time_keys..':'..excess_list_id
+    excess_list_exist       = redis.call( 'EXISTS', excess_data_key )
+    local excess_data_id    = redis.call( 'HGET', excess_info_key, 'oldest_data_id' )
+    excess_data             = redis.call( 'HGET', excess_data_key, excess_data_id )
+    local excess_data_len   = #excess_data
+    local excess_data_time  = redis.call( 'ZSCORE', excess_time_key, excess_data_id )
+    redis.call( 'HDEL',     excess_data_key, excess_data_id )
+    redis.call( 'HSET', excess_info_key, 'last_removed_time', excess_data_time )
+    redis.call( 'HINCRBY',  status_key, 'items', -1 )
+    if redis.call( 'EXISTS', excess_data_key ) == 1 then
+        redis.call( 'ZREM', excess_time_key, excess_data_id )
+        local oldest_data_id
+        local oldest_time
+        local vals      = redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )
+        oldest_data_id  = vals[1]
+        oldest_time     = vals[2]
+        redis.call( 'HMSET',    excess_info_key, 'oldest_time', oldest_time, 'oldest_data_id', oldest_data_id )
+        redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
+    else
+        redis.call( 'DEL',      excess_info_key, excess_time_key )
+        redis.call( 'HINCRBY',  status_key, 'lists', -1 )
+        redis.call( 'ZREM',     queue_key, excess_list_id )
     end
+    redis.call( 'HINCRBY', status_key, 'length', -excess_data_len )
 end
-return { queue_exist, status_exist, excess_list_exist, excess_id, excess_data }
-POP_OLDEST
+return { queue_exist, status_exist, excess_list_exist, excess_list_id, excess_data }
+END_POP_OLDEST
 
-$lua_script_body{validate} =
-<<"VALIDATE" ;
-local queue_key     = KEYS[1]
-local status_key    = KEYS[2]
+$lua_script_body{validate} = <<"END_VALIDATE";
+local coll_name     = ARGV[1]
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
 local status_exist  = redis.call( 'EXISTS', status_key )
 if status_exist == 1 then
     local length = redis.call( 'HGET', status_key, 'length' )
     local lists  = redis.call( 'HGET', status_key, 'lists' )
-    local llen   = redis.call( 'LLEN', queue_key )
-    return { status_exist, length, lists, llen }
+    local items  = redis.call( 'HGET', status_key, 'items' )
+    return { status_exist, length, lists, items }
 end
 return { status_exist, false, false, false }
-VALIDATE
+END_VALIDATE
 
-$lua_script_body{drop} =
-<<"DROP" ;
-local queue_key     = KEYS[1]
-local status_key    = KEYS[2]
-local lists_key     = KEYS[3]
-return redis.call( 'DEL', queue_key, status_key, unpack( redis.call( 'KEYS', lists_key..':*' ) ) )
-DROP
-
-$lua_script_body{verify_collection} =
-<<"VERIFY_COLLECTION" ;
-local key   = KEYS[1]
-local size  = ARGV[1]
-local exist = redis.call( 'EXISTS', key )
-if exist == 1 then
-    local vals = redis.call( 'HMGET', key, 'size' )
-    size = vals[1]
-else
-    redis.call( 'HMSET', key, 'size', size, 'length', 0, 'lists', 0 )
+$lua_script_body{drop} = <<"END_DROP";
+local coll_name         = ARGV[1]
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+$_lua_info_keys
+$_lua_data_keys
+$_lua_time_keys
+local ret           = 0
+local arr
+if redis.call( 'EXISTS', status_key ) == 1 then
+    ret = ret + redis.call( 'DEL', queue_key, status_key )
 end
-return { exist, size }
-VERIFY_COLLECTION
+arr = redis.call( 'KEYS', info_keys..':*' )
+if #arr > 0 then
+    for i = 1, #arr do
+        ret = ret + redis.call( 'DEL', arr[i] )
+    end
+    local patterns = { data_keys, time_keys }
+    local key
+    local i
+    for k = 1, #patterns do
+        arr = redis.call( 'KEYS', patterns[k]..':*' )
+        for i = 1, #arr do
+            ret = ret + redis.call( 'DEL', arr[i] )
+        end
+    end
+end
+return ret
+END_DROP
+
+$lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
+local coll_name     = ARGV[1]
+local size          = ARGV[2]
+local older_allowed = ARGV[3]
+$_lua_namespace
+$_lua_status_key
+local status_exist  = redis.call( 'EXISTS', status_key )
+if status_exist == 1 then
+    size            = redis.call( 'HGET', status_key, 'size' )
+    older_allowed   = redis.call( 'HGET', status_key, 'older_allowed' )
+else
+    redis.call( 'HMSET', status_key, 'size', size, 'length', 0, 'lists', 0, 'items', 0, 'older_allowed', older_allowed )
+end
+return { status_exist, size, older_allowed }
+END_VERIFY_COLLECTION
 
 subtype __PACKAGE__.'::NonNegInt',
     as 'Int',
@@ -290,7 +410,6 @@ sub BUILD {
     $self->_redis( $self->_redis_constructor )
         unless ( $self->_redis );
 
-#    unless ( eval { $self->_redis->script( 'EXISTS', 'ffffffffffffffffffffffffffffffffffffffff' ) } )
     my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
     if ( $major < 2 or ( $major == 2 and $minor <= 4 ) )
     {
@@ -299,13 +418,19 @@ sub BUILD {
     }
 
     $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
+    if ( $self->_maxmemory_policy =~ /^all/ )
+    {
+        $self->_throw( EMAXMEMORYPOLICY );
+    }
     $self->_maxmemory(        ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory'        ) )[1] );
     $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
         if $self->_maxmemory;
 
     $self->_queue_key(  NAMESPACE.':queue:'.$self->name );
     $self->_status_key( NAMESPACE.':status:'.$self->name );
-    $self->_lists_key(  NAMESPACE.':L:'.$self->name );
+    $self->_info_keys(  NAMESPACE.':I:'.$self->name );
+    $self->_data_keys(  NAMESPACE.':D:'.$self->name );
+    $self->_time_keys(  NAMESPACE.':T:'.$self->name );
 
     $self->_verify_collection;
 }
@@ -351,6 +476,12 @@ has 'max_datasize'      => (
                     },
     );
 
+has 'older_allowed' => (
+    is          => 'ro',
+    isa         => 'Bool',
+    default     => 1,
+    );
+
 has 'last_errorcode'    => (
     reader      => 'last_errorcode',
     writer      => '_set_last_errorcode',
@@ -385,7 +516,14 @@ has '_maxmemory' => (
     init_arg    => undef,
     );
 
-foreach my $attr_name ( qw( _maxmemory_policy _queue_key _status_key _lists_key ) )
+foreach my $attr_name ( qw(
+    _maxmemory_policy
+    _queue_key
+    _status_key
+    _info_keys
+    _data_keys
+    _time_keys
+    ) )
 {
     has $attr_name => (
         is          => 'rw',
@@ -407,30 +545,34 @@ has '_lua_scripts' => (
 sub insert {
     my $self        = shift;
     my $data        = shift;
-    my $id          = shift // $uuid->create_str;
+    my $list_id     = shift // $uuid->create_str;
+    my $data_id     = shift // '';
+    my $data_time   = shift // scalar gettimeofday;
 
-    $data                                           // $self->_throw( EMISMATCHARG );
-    _STRING( $id )                                  // $self->_throw( EMISMATCHARG );
-    ( defined( _STRING( $data ) ) or $data eq '' )  || $self->_throw( EMISMATCHARG );
+    $data                                                   // $self->_throw( EMISMATCHARG );
+    ( defined( _STRING( $data ) ) or $data eq '' )          || $self->_throw( EMISMATCHARG );
+    _STRING( $list_id )                                     // $self->_throw( EMISMATCHARG );
+    ( defined( _STRING( $data_id ) ) or $data_id eq '' )    || $self->_throw( EMISMATCHARG );
+    ( defined( _NUMBER( $data_time ) ) and $data_time > 0 ) || $self->_throw( EMISMATCHARG );
 
     my $data_len = bytes::length( $data );
-    $self->size and ( ( $data_len <= $self->size )  || $self->_throw( EMISMATCHARG ) );
-    ( $data_len <= $self->max_datasize )            || $self->_throw( EDATATOOLARGE );
+    $self->size and ( ( $data_len <= $self->size )          || $self->_throw( EMISMATCHARG ) );
+    ( $data_len <= $self->max_datasize )                    || $self->_throw( EDATATOOLARGE );
 
     $self->_set_last_errorcode( ENOERROR );
 
-    my ( $status_exist, $data_index ) = $self->_call_redis(
+    my ( $error, $status_exist, $result_data_id ) = $self->_call_redis(
         $self->_lua_script_cmd( 'insert' ),
-        4,
-        $self->_queue_key,
-        $self->_status_key,
-        $self->_data_list_name( $id ),
-        $self->_lists_key,
-        $id,
-        $self->size,
-        $data,
+        0,
+        $self->name,
         $self->size_garbage,
+        $list_id,
+        $data_id,
+        $data,
+        $data_time,
         );
+
+    if ( $error ) { $self->_throw( $error ); }
 
     unless ( $status_exist )
     {
@@ -438,38 +580,34 @@ sub insert {
         $self->_throw( ECOLLDELETED );
     }
 
-    return wantarray ? ( $id, $data_index ) : $id;
+    return wantarray ? ( $list_id, $result_data_id ) : $list_id;
 }
 
 sub update {
     my $self        = shift;
-    my $id          = shift;
-    my $index       = shift;
+    my $list_id     = shift;
+    my $data_id     = shift;
     my $data        = shift;
 
+    _STRING( $list_id )                             // $self->_throw( EMISMATCHARG );
+    defined( _STRING( $data_id ) )                  || $self->_throw( EMISMATCHARG );
     $data                                           // $self->_throw( EMISMATCHARG );
-    _STRING( $id )                                  // $self->_throw( EMISMATCHARG );
     ( defined( _STRING( $data ) ) or $data eq '' )  || $self->_throw( EMISMATCHARG );
-    _NONNEGINT( $index )                            // $self->_throw( EMISMATCHARG );
 
     my $data_len = bytes::length( $data );
     $self->size and ( ( $data_len <= $self->size )  || $self->_throw( EMISMATCHARG ) );
     ( $data_len <= $self->max_datasize )            || $self->_throw( EDATATOOLARGE );
 
-    my ( $ret, $status_exist );
     $self->_set_last_errorcode( ENOERROR );
 
-    ( $status_exist, $ret ) = $self->_call_redis(
+    my ( $status_exist, $ret ) = $self->_call_redis(
         $self->_lua_script_cmd( 'update' ),
-        4,
-        $self->_queue_key,
-        $self->_status_key,
-        $self->_data_list_name( $id ),
-        $self->_lists_key,
-        $self->size,
-        $index,
-        $data,
+        0,
+        $self->name,
         $self->size_garbage,
+        $list_id,
+        $data_id,
+        $data,
         );
 
     unless ( $status_exist )
@@ -483,27 +621,28 @@ sub update {
 
 sub receive {
     my $self        = shift;
-    my $id          = shift;
-    my $index       = shift;
+    my $list_id     = shift;
+    my $data_id     = shift;
 
-    _STRING( $id ) // $self->_throw( EMISMATCHARG );
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG );
 
     $self->_set_last_errorcode( ENOERROR );
 
-    if ( defined $index )
+    my $data_key = $self->_data_list_key( $list_id );
+    if ( defined( $data_id ) and $data_id ne '' )
     {
-        _NONNEGINT( $index ) // $self->_throw( EMISMATCHARG );
-        return $self->_call_redis( 'LRANGE', $self->_data_list_name( $id ), $index, $index );
+        _STRING( $data_id ) // $self->_throw( EMISMATCHARG );
+        return $self->_call_redis( 'HGET', $data_key, $data_id );
     }
     else
     {
         if ( wantarray )
         {
-            return $self->_call_redis( 'LRANGE', $self->_data_list_name( $id ), 0, -1 );
+            return $self->_call_redis( defined( $data_id ) ? 'HGETALL' : 'HVALS', $data_key );
         }
         else
         {
-            return $self->_call_redis( 'LLEN', $self->_data_list_name( $id ) );
+            return $self->_call_redis( 'HLEN', $data_key );
         }
     }
 }
@@ -517,10 +656,8 @@ sub pop_oldest {
     my ( $queue_exist, $status_exist, $excess_list_exist, $excess_id, $excess_data ) =
         $self->_call_redis(
             $self->_lua_script_cmd( 'pop_oldest' ),
-            3,
-            $self->_queue_key,
-            $self->_status_key,
-            NAMESPACE.':L:'.$self->name
+            0,
+            $self->name,
             );
 
     if ( $queue_exist )
@@ -548,9 +685,8 @@ sub validate {
 
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'validate' ),
-        2,
-        $self->_queue_key,
-        $self->_status_key,
+        0,
+        $self->name,
         );
 
     unless ( shift @ret )
@@ -564,21 +700,24 @@ sub validate {
 
 sub exists {
     my $self        = shift;
-    my $id          = shift;
+    my $list_id     = shift;
 
-    _STRING( $id ) // $self->_throw( EMISMATCHARG );
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG );
 
     $self->_set_last_errorcode( ENOERROR );
 
-    return $self->_call_redis( 'EXISTS', $self->_data_list_name( $id ) );
+    return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
 }
 
 sub lists {
     my $self        = shift;
+    my $pattern     = shift // '*';
+
+    _STRING( $pattern ) // $self->_throw( EMISMATCHARG );
 
     $self->_set_last_errorcode( ENOERROR );
 
-    return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_name( '*' ) );
+    return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
 }
 
 sub drop {
@@ -588,10 +727,8 @@ sub drop {
 
     my $ret = $self->_call_redis(
         $self->_lua_script_cmd( 'drop' ),
-        3,
-        $self->_queue_key,
-        $self->_status_key,
-        $self->_lists_key,
+        0,
+        $self->name,
         );
 
     $self->_clear_name;
@@ -617,44 +754,43 @@ sub _lua_script_cmd {
     my $self        = shift;
     my $name        = shift;
 
-    if ( !$self->_lua_scripts->{ $name } )
+    my $sha1 = $self->_lua_scripts->{ $name };
+    unless ( $sha1 )
     {
-        $self->_lua_scripts->{ $name } = sha1_hex( $lua_script_body{ $name } );
-        return( 'EVAL', $lua_script_body{ $name } );
+        $sha1 = $self->_lua_scripts->{ $name } = sha1_hex( $lua_script_body{ $name } );
+        unless ( ( $self->_call_redis( 'SCRIPT', 'EXISTS', $sha1 ) )[0] )
+        {
+            return( 'EVAL', $lua_script_body{ $name } );
+        }
     }
-    elsif ( $self->_maxmemory_policy !~ /^all/ )
-    {
-        return( 'EVALSHA', $self->_lua_scripts->{ $name } );
-    }
-    else
-    {
-        return( 'EVAL', $lua_script_body{ $name } );
-    }
+    return( 'EVALSHA', $sha1 );
 }
 
-sub _data_list_name {
+sub _data_list_key {
     my $self        = shift;
-    my $id          = shift;
+    my $list_id     = shift;
 
-    return $self->_lists_key.':'.$id;
+    return( $self->_data_keys.':'.$list_id );
 }
 
 sub _verify_collection {
     my $self    = shift;
 
-    my $key = NAMESPACE.':status:'.$self->name;
     $self->_set_last_errorcode( ENOERROR );
 
-    my ( $key_exist, $size ) = $self->_call_redis(
+    my ( $status_exist, $size, $older_allowed ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
-        1,
-        $key,
+        0,
+        $self->name,
         $self->size || 0,
+        $self->older_allowed ? 1 : 0,
         );
-    if ( $key_exist )
+
+    if ( $status_exist )
     {
         $self->_set_size( $size ) unless $self->size;
-        $size == $self->size or $self->_throw( EMISMATCHARG );
+        $size           == $self->size          or $self->_throw( EMISMATCHARG );
+        $older_allowed  == $self->older_allowed or $self->_throw( EMISMATCHARG );
     }
 }
 

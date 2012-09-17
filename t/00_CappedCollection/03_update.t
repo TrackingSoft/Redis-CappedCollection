@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -92,21 +94,27 @@ for ( my $i = 1; $i <= 10; ++$i )
 # verify
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    $list_key = NAMESPACE.':L:'.$coll->name.':'.$i;
-    is( $coll->_call_redis( "LINDEX", $list_key, $_ - $i ), $_, "correct inserted value ($i list)" ) for $i..10;
+    foreach my $type ( qw( I D T ) )
+    {
+        $list_key = NAMESPACE.":$type:".$coll->name.':'.$i;
+        ok $coll->_call_redis( "EXISTS", $list_key ), "data list created";
+    }
+    $list_key = NAMESPACE.':D:'.$coll->name.':'.$i;
+    is( $coll->_call_redis( "HGET", $list_key, $_ - $i ), $_, "correct inserted value ($i list)" ) for $i..10;
 }
 
 # reverse updates
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    $coll->update( $i, $_ - $i, 10 - $_ + $i ) for $i..10;
+    $tmp = $coll->update( $i, $_ - $i, 10 - $_ + $i ) for $i..10;
+    ok $tmp, "correct update";
 }
 
 # verify
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    $list_key = NAMESPACE.':L:'.$coll->name.':'.$i;
-    is( $coll->_call_redis( "LINDEX", $list_key, $_ - $i ), 10 - $_ + $i, "correct updated value ($i list)" ) for $i..10;
+    $list_key = NAMESPACE.':D:'.$coll->name.':'.$i;
+    is( $coll->_call_redis( "HGET", $list_key, $_ - $i ), 10 - $_ + $i, "correct updated value ($i list)" ) for $i..10;
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
@@ -138,7 +146,7 @@ is $coll->_call_redis( "HGET", $status_key, 'length' ), $tmp, "correct length va
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->update( $i, $_ - $i, ( 10 - $_ + $i ).'*' ), $tmp += bytes::length( $_."" ) + 1 ) for $i..10;
+    ( $coll->update( $i, $_ - $i, ( 10 - $_ + $i ).'*' ), $tmp += bytes::length( ( 10 - $_ + $i ).'*' ) ) for $i..10;
 }
 
 is $coll->_call_redis( "HGET", $status_key, 'length' ), $tmp, "correct length value";
@@ -160,8 +168,8 @@ ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 $coll->insert( $_, "id" ) for 1..9;
-$list_key = NAMESPACE.':L:'.$coll->name.':id';
-is $coll->_call_redis( "LLEN", $list_key   ), 9, "correct list length";
+$list_key = NAMESPACE.':D:'.$coll->name.':id';
+is $coll->_call_redis( "HLEN", $list_key ), 9, "correct list length";
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value";
 
 $tmp = 0;
@@ -183,35 +191,47 @@ foreach my $i ( 1..9 )
     }
     elsif ( $i == 3 )
     {
-        # 10 = 2* 3  3*  5  6  7  8  9
+        # 10 = 2* 3* 4  5  6  7  8  9
         ok $tmp, "OK update $i";
         $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
         is $tmp, 10, "correct length value 10";
     }
     elsif ( $i == 4 )
     {
-        # 9 = 3  3* 4* 6  7  8  9
+        # 9 = 3* 4* 5  6  7  8  9
         ok $tmp, "OK update $i";
         is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value 9";
     }
     elsif ( $i == 5 )
     {
-        # 10 = 3  3* 4* 6  5* 8  9
+        # 10 = 3* 4* 5*  6  7  8  9
         ok $tmp, "OK update $i";
         is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 10";
     }
     elsif ( $i == 6 )
     {
-        # 10 = 3* 4* 6  5* 6* 9
+        # 9 = 4* 5* 6*  7  8  9
         ok $tmp, "OK update $i";
-        is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 10";
+        is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value 10";
     }
     elsif ( $i == 7 )
     {
-        # 10 = 3* 4* 6  5* 6* 9
-        ok !$tmp, "not updated $i";
+        # 10 = 4* 5* 6* 7*  8  9
+        ok $tmp, "OK update $i";
         is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 10";
-        is $coll->_call_redis( "LLEN", $list_key ), 6, "correct list length";
+    }
+    elsif ( $i == 8 )
+    {
+        # 9 = 5* 6* 7* 8*  9
+        ok $tmp, "OK update $i";
+        is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value 10";
+    }
+    elsif ( $i == 9 )
+    {
+        # 10 = 5* 6* 7* 8* 9*
+        ok $tmp, "OK update $i";
+        is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 10";
+        is $coll->_call_redis( "HLEN", $list_key ), 5, "correct list length";
         last;
     }
 }
@@ -219,12 +239,24 @@ foreach my $i ( 1..9 )
 $tmp = $coll->update( "bad_id", 0, '*' );
 ok !$tmp, "not updated";
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 10";
-is $coll->_call_redis( "LLEN", $list_key ), 6, "correct list length";
+is $coll->_call_redis( "HLEN", $list_key ), 5, "correct list length";
 
-$tmp = $coll->update( "id", 0, '***' );
+$tmp = $coll->update( "id", 3, '***' );
 ok !$tmp, "not updated";
+is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 8";
+is $coll->_call_redis( "HLEN", $list_key ), 5, "correct list length";
+
+$tmp = $coll->update( "id", 5-1, '***' );
+ok !$tmp, "not updated";
+# 8 = 6* 7* 8* 9*
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 8, "correct length value 8";
-is $coll->_call_redis( "LLEN", $list_key ), 5, "correct list length";
+is $coll->_call_redis( "HLEN", $list_key ), 4, "correct list length";
+
+$tmp = $coll->update( "id", 9-1, '*' x 10 );
+ok $tmp, "updated";
+# 10 = **********
+is $coll->_call_redis( "HGET", $status_key, 'length' ), 10, "correct length value 8";
+is $coll->_call_redis( "HLEN", $list_key ), 1, "correct list length";
 
 # errors in the arguments
 # 8 = 4* 6  5* 6* 9
@@ -249,7 +281,7 @@ foreach my $arg ( ( undef, 9999999999999999, \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
+foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll->update(
         'id',

@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 12;
+use Test::More tests => 14;
 
 BEGIN { use_ok 'Redis::CappedCollection', qw(
     DEFAULT_SERVER
@@ -21,6 +21,8 @@ BEGIN { use_ok 'Redis::CappedCollection', qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     ) }
 
 my $val;
@@ -38,4 +40,6 @@ ok( defined( $_ ), "import OK: $_" ) foreach qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );

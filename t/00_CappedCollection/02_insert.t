@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -78,18 +80,21 @@ ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 $status_key  = NAMESPACE.':status:'.$coll->name;
 $queue_key   = NAMESPACE.':queue:'.$coll->name;
-my $saved_name = $coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 # all correct
 $id = $coll->insert( "Some stuff", "Some id" );
 is $id, "Some id", "correct result";
-$list_key = NAMESPACE.':L:'.$coll->name.':'.$id;
 ok $coll->_call_redis( "EXISTS", $queue_key ), "queue list created";
-ok $coll->_call_redis( "EXISTS", $list_key ), "data list created";
+foreach my $type ( qw( I D T ) )
+{
+    $list_key = NAMESPACE.":$type:".$coll->name.':'.$id;
+    ok $coll->_call_redis( "EXISTS", $list_key ), "data list created";
+}
 is $coll->_call_redis( "HGET", $status_key, 'length' ), bytes::length( "Some stuff" ), "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 1, "correct status value";
+is $coll->_call_redis( "HGET", $status_key, 'size'   ), 0, "correct status value";
 
 $tmp = $coll->insert( "Some new stuff", "Some id" );
 is $tmp, $id, "correct result";
@@ -104,12 +109,13 @@ is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 2, "correct status value
 $id = $coll->insert( "Any stuff" );
 is bytes::length( $id ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
 
+my $saved_name = $coll->name;
 ( undef, $tmp ) = $coll->insert( "Stuff", "ID" );
-is( $tmp + 1, 1, "list len correct" );
+is( $tmp, 0, "data id correct" );
 ( undef, $tmp ) = $coll->insert( "Stuff", "ID" );
-is( $tmp + 1, 2, "list len correct" );
+is( $tmp, 1, "data id correct" );
 ( undef, $tmp ) = $coll->insert( "Stuff", "ID" );
-is( $tmp + 1, 3, "list len correct" );
+is( $tmp, 2, "data id correct" );
 
 # errors in the arguments
 $coll = Redis::CappedCollection->new(
@@ -128,7 +134,7 @@ foreach my $arg ( ( undef, \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-foreach my $arg ( ( \"scalar", [], $uuid ) )
+foreach my $arg ( ( "", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll->insert(
         "Correct stuff",
@@ -136,21 +142,57 @@ foreach my $arg ( ( \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-# make sure that the data is saved and not destroyed
-is $coll->_call_redis( "LLEN", $queue_key  ), 7, "correct status value";
-is $coll->_call_redis( "LLEN", $list_key   ), 2, "correct status value";
-$tmp = NAMESPACE.':L:'.$coll->name;
-@arr = $coll->_call_redis( "KEYS", NAMESPACE.':L:'.$saved_name.':*' );
-is( scalar( @arr ), 4, "correct number of lists created" );
+foreach my $arg ( ( \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll->insert(
+        "Correct stuff",
+        "List id",
+        $arg,
+        ) } "expecting to die: ".( $arg || '' );
+}
 
-@arr = $coll->_call_redis( "LRANGE", $queue_key, 0, -1 );
+$tmp = 0;
+foreach my $arg ( ( 0, -1, -3, "", "0", \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll->insert(
+        "Correct stuff",
+        "List id",
+        $tmp++,
+        $arg,
+        ) } "expecting to die: ".( $arg || '' );
+}
+
+# make sure that the data is saved and not destroyed
+is $coll->_call_redis( "ZCOUNT", $queue_key, '-inf', '+inf' ), 4, "correct list number";
+is $coll->_call_redis( "HGET", $status_key, 'lists' ), 4, "correct status value";
+
+$list_key = NAMESPACE.":I:".$saved_name.':ID';
+is $coll->_call_redis( "HGET", $list_key, 'next_data_id' ), 3, "correct info value";
+is $coll->_call_redis( "HGET", $list_key, 'last_removed_time' ), 0, "correct info value";
+ok( $coll->_call_redis( "HGET", $list_key, 'oldest_time' ) > 0, "correct info value" );
+is $coll->_call_redis( "HGET", $list_key, 'oldest_data_id' ), 0, "correct info value";
+
+$list_key = NAMESPACE.":D:".$saved_name.':ID';
+is $coll->_call_redis( "HLEN", $list_key ), 3, "correct data number";
+
+$list_key = NAMESPACE.":T:".$saved_name.':ID';
+is $coll->_call_redis( "ZCOUNT", $list_key, '-inf', '+inf' ), 3, "correct time number";
+
+foreach my $type ( qw( I D T ) )
+{
+    @arr = $coll->_call_redis( "KEYS", NAMESPACE.":$type:$saved_name:*" );
+    is( scalar( @arr ), 4, "correct number of lists created" );
+}
+
+@arr = $coll->_call_redis( "ZRANGE", $queue_key, 0, -1 );
 $tmp = "@arr";
-@arr = ( "Some id", "Some id", "Some new id", $id, "ID", "ID", "ID" );
+@arr = ( "Some id", "Some new id", $id, "ID" );
 is $tmp, "@arr", "correct values set";
 
-@arr = $coll->_call_redis( "LRANGE", $list_key, 0, -1 );
+$list_key = NAMESPACE.":D:".$saved_name.':Some id';
+@arr = sort $coll->_call_redis( "HVALS", $list_key );
 $tmp = "@arr";
-@arr = ( "Some stuff", "Some new stuff" );
+@arr = ( "Some new stuff", "Some stuff" );
 is $tmp, "@arr", "correct values set";
 
 # destruction of status hash
@@ -170,7 +212,7 @@ ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 $status_key  = NAMESPACE.':status:'.$coll->name;
 
-$list_key = NAMESPACE.':L:*';
+$list_key = NAMESPACE.':D:*';
 foreach my $i ( 1..( $coll->size * 2 ) )
 {
     $id = $coll->insert( $i, $i );
@@ -182,6 +224,32 @@ $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
 @arr = $coll->_call_redis( "KEYS", $list_key );
 is $tmp, $coll->size, "correct length value";
 is scalar( @arr ), 4, "correct lists value";
+
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+
+#-------------------------------------------------------------------------------
+$coll = Redis::CappedCollection->new(
+    $redis,
+    size    => 5,
+    );
+isa_ok( $coll, 'Redis::CappedCollection' );
+ok $coll->_server =~ /.+:$port$/, $msg;
+ok ref( $coll->_redis ) =~ /Redis/, $msg;
+$status_key  = NAMESPACE.':status:'.$coll->name;
+
+$list_key = NAMESPACE.':D:*';
+foreach my $i ( 1..( $coll->size * 2 ) )
+{
+    $id = $coll->insert( $i, $i );
+    $id = $coll->insert( $i, $i );
+    $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
+    @arr = $coll->_call_redis( "KEYS", $list_key );
+    ok $tmp <= $coll->size, "correct lists value: ".( $i * 2 )." inserts, $tmp length, size = ".$coll->size.", ".scalar( @arr )." lists";
+}
+$tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
+@arr = $coll->_call_redis( "KEYS", $list_key );
+is $tmp, $coll->size, "correct length value";
+is scalar( @arr ), 2, "correct lists value";
 
 $id = $coll->insert( '*' x $coll->size );
 $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );

@@ -17,7 +17,6 @@ use Redis::CappedCollection qw(
     EDATATOOLARGE
     ENETWORK
     EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
     );
@@ -54,11 +53,6 @@ sub exception {
     {
         # For example, return code to restart the server
         #return 'to restart the redis server';
-    }
-    elsif ( $coll->last_errorcode == EMAXMEMORYPOLICY )
-    {
-        # For example, return code to reinser the data
-        #return "to recreate look at $err";
     }
     elsif ( $coll->last_errorcode == ECOLLDELETED )
     {

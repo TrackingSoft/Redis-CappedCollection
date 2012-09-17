@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
@@ -86,7 +88,7 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 @arr = $coll->validate;
 is $arr[0], 0, "OK length";
 is $arr[1], 0, "OK lists";
-is $arr[2], 0, "OK queue length";
+is $arr[2], 0, "OK items";
 
 # some inserts
 $len = 0;
@@ -97,7 +99,7 @@ for ( my $i = 1; $i <= 10; ++$i )
     @arr = $coll->validate;
     is $arr[0], $tmp,   "OK length";
     is $arr[1], $i,     "OK lists";
-    is $arr[2], $len,   "OK queue length";
+    is $arr[2], $len,   "OK items";
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
@@ -112,14 +114,14 @@ ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 $status_key  = NAMESPACE.':status:'.$coll->name;
 
-$list_key = NAMESPACE.':L:*';
+$list_key = NAMESPACE.':D:*';
 foreach my $i ( 1..( $coll->size * 2 ) )
 {
     $id = $coll->insert( '*', $i );
     @arr = $coll->validate;
     is $arr[0], ( $i <= $coll->size ) ? $i : $coll->size, "OK length";
     is $arr[1], ( $i <= $coll->size ) ? $i : $coll->size, "OK lists";
-    is $arr[2], ( $i <= $coll->size ) ? $i : $coll->size, "OK queue length";
+    is $arr[2], ( $i <= $coll->size ) ? $i : $coll->size, "OK items";
 }
 
 $id = $coll->insert( '*' x $coll->size );
@@ -131,14 +133,14 @@ is scalar( @arr ), 1, "correct lists value";
 @arr = $coll->validate;
 is $arr[0], $coll->size,    "OK length";
 is $arr[1], 1,              "OK lists";
-is $arr[2], 1,              "OK queue length";
+is $arr[2], 1,              "OK items";
 
 dies_ok { $id = $coll->insert( '*' x ( $coll->size + 1 ) ) } "expecting to die";
 
 @arr = $coll->validate;
 is $arr[0], $coll->size,    "OK length";
 is $arr[1], 1,              "OK lists";
-is $arr[2], 1,              "OK queue length";
+is $arr[2], 1,              "OK items";
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
@@ -157,14 +159,14 @@ ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 $coll->insert( $_, "id" ) for 1..9;
-$list_key = NAMESPACE.':L:'.$coll->name.':id';
-is $coll->_call_redis( "LLEN", $list_key   ), 9, "correct list length";
+$list_key = NAMESPACE.':D:'.$coll->name.':id';
+is $coll->_call_redis( "HLEN", $list_key ), 9, "correct list length";
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value";
 
 @arr = $coll->validate;
 is $arr[0], 9, "OK length";
 is $arr[1], 1,  "OK lists";
-is $arr[2], 9,  "OK queue length";
+is $arr[2], 9,  "OK items";
 
 $tmp = 0;
 # 9 = 1  2  3  4  5  6  7  8  9
@@ -174,63 +176,83 @@ foreach my $i ( 1..9 )
     if ( $i == 1 )
     {
         # 10 = 1* 2  3  4  5  6  7  8  9
+        ok $tmp, "OK update $i";
         @arr = $coll->validate;
         is $arr[0], 10, "OK length";
         is $arr[1], 1,  "OK lists";
-        is $arr[2], 9,  "OK queue length";
+        is $arr[2], 9,  "OK items";
     }
     elsif ( $i == 2 )
     {
         # 9 = 2* 3  4  5  6  7  8  9
+        ok $tmp, "OK update $i";
         @arr = $coll->validate;
         is $arr[0], 9, "OK length";
         is $arr[1], 1, "OK lists";
-        is $arr[2], 8, "OK queue length";
+        is $arr[2], 8, "OK items";
     }
     elsif ( $i == 3 )
     {
-        # 10 = 2* 3  3*  5  6  7  8  9
+        # 10 = 2* 3* 4  5  6  7  8  9
         ok $tmp, "OK update $i";
         @arr = $coll->validate;
         is $arr[0], 10, "OK length";
         is $arr[1], 1,  "OK lists";
-        is $arr[2], 8,  "OK queue length";
+        is $arr[2], 8,  "OK items";
     }
     elsif ( $i == 4 )
     {
-        # 9 = 3  3* 4* 6  7  8  9
+        # 9 = 3* 4* 5  6  7  8  9
         ok $tmp, "OK update $i";
         @arr = $coll->validate;
         is $arr[0], 9, "OK length";
         is $arr[1], 1, "OK lists";
-        is $arr[2], 7, "OK queue length";
+        is $arr[2], 7, "OK items";
     }
     elsif ( $i == 5 )
     {
-        # 10 = 3  3* 4* 6  5* 8  9
+        # 10 = 3* 4* 5*  6  7  8  9
         ok $tmp, "OK update $i";
         @arr = $coll->validate;
         is $arr[0], 10, "OK length";
         is $arr[1], 1, "OK lists";
-        is $arr[2], 7, "OK queue length";
+        is $arr[2], 7, "OK items";
     }
     elsif ( $i == 6 )
     {
-        # 10 = 3* 4* 6  5* 6* 9
+        # 9 = 4* 5* 6*  7  8  9
         ok $tmp, "OK update $i";
         @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
+        is $arr[0], 9, "OK length";
         is $arr[1], 1, "OK lists";
-        is $arr[2], 6, "OK queue length";
+        is $arr[2], 6, "OK items";
     }
     elsif ( $i == 7 )
     {
-        # 10 = 3* 4* 6  5* 6* 9
-        ok !$tmp, "not updated $i";
+        # 10 = 4* 5* 6* 7*  8  9
+        ok $tmp, "not updated $i";
         @arr = $coll->validate;
         is $arr[0], 10, "OK length";
         is $arr[1], 1, "OK lists";
-        is $arr[2], 6, "OK queue length";
+        is $arr[2], 6, "OK items";
+    }
+    elsif ( $i == 8 )
+    {
+        # 9 = 5* 6* 7* 8*  9
+        ok $tmp, "not updated $i";
+        @arr = $coll->validate;
+        is $arr[0], 9, "OK length";
+        is $arr[1], 1, "OK lists";
+        is $arr[2], 5, "OK items";
+    }
+    elsif ( $i == 9 )
+    {
+        # 10 = 5* 6* 7* 8* 9*
+        ok $tmp, "not updated $i";
+        @arr = $coll->validate;
+        is $arr[0], 10, "OK length";
+        is $arr[1], 1, "OK lists";
+        is $arr[2], 5, "OK items";
         last;
     }
 }
@@ -240,13 +262,13 @@ ok !$tmp, "not updated";
 @arr = $coll->validate;
 is $arr[0], 10, "OK length";
 is $arr[1], 1, "OK lists";
-is $arr[2], 6, "OK queue length";
+is $arr[2], 5, "OK items";
 
 $tmp = $coll->update( "id", 0, '***' );
 ok !$tmp, "not updated";
 @arr = $coll->validate;
-is $arr[0], 8, "OK length";
+is $arr[0], 10, "OK length";
 is $arr[1], 1, "OK lists";
-is $arr[2], 5, "OK queue length";
+is $arr[2], 5, "OK items";
 
 }

@@ -39,6 +39,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYPOLICY
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [] )
@@ -150,19 +152,23 @@ new_connect();
 $tmp = 'A';
 $coll->insert( $tmp++, $name ) for 1..10;
 @arr = $coll->receive( $name );
+# data_id = 0 1 2 3 4 5 6 7 8 9
 is "@arr", "A B C D E F G H I J", "correct value";
 $coll->insert( $tmp++, $name );
 @arr = $coll->receive( $name );
+# data_id = 6 7 8 9 10
 is "@arr", "G H I J K", "correct value";
-$coll->update( $name, 0, $tmp++ );
+$coll->update( $name, 6, $tmp++ );
 @arr = $coll->receive( $name );
+# data_id = 6 7 8 9 10
 is "@arr", "L H I J K", "correct value";
 $coll->insert( $tmp++, $name ) for 1..5;
 @arr = $coll->receive( $name );
+# data_id = 6 7 8 9 10
 is "@arr", "L H I J K M N O P Q", "correct value";
 $coll->update( $name, 6, '**' );
 @arr = $coll->receive( $name );
-is "@arr", "** O P Q", "correct value";
+is "@arr", "N O P Q", "correct value";
 
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
