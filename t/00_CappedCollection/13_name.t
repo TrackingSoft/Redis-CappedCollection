@@ -115,7 +115,7 @@ is $coll->name, $msg, $msg;
 
 $coll->drop;
 
-foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
+foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
         redis   => DEFAULT_SERVER.":".empty_port(),

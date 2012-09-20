@@ -122,6 +122,9 @@ push @arr, ( $_ - 1, $_ ) for 1..10;
 my @ret = $coll->receive( "Some id", '' );
 is "@arr", "@ret", "correct receive";
 
+$tmp = $coll->receive( "Some id", 'bad_id' );
+is $tmp, undef, "correct receive";
+
 # errors in the arguments
 
 dies_ok { $coll->receive() } "expecting to die - no args";

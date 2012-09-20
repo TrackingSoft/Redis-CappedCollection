@@ -134,7 +134,7 @@ foreach my $arg ( ( undef, \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-foreach my $arg ( ( "", \"scalar", [], $uuid ) )
+foreach my $arg ( ( "", "Some:id", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll->insert(
         "Correct stuff",

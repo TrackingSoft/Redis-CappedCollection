@@ -10,7 +10,6 @@ use lib 'lib';
 
 use bytes;
 use Carp;
-#use Benchmark       qw( :hireswallclock timediff );
 use Time::HiRes     qw( gettimeofday );
 use Redis;
 use List::Util      qw( min );
@@ -148,6 +147,7 @@ sub tsk {
 
 sub client_info {
     my $redis_info = $redis->info;
+    print "WARNING: Do not forget to manually delete the test data.\n";
     print '-' x 78, "\n";
     print "CLIENT INFO:\n",
         "server         $server",                       "\n",
@@ -248,47 +248,40 @@ $coll = Redis::CappedCollection->new(
 
 my $list_id;
 my ( $secs, $count ) = ( 0, 0 );
-#my ( $timestamp1, $timestamp2 );
 my ( $time_before, $time_after );
 my ( $start_time, $last_stats_reports_time, $last_info_reports_time );
 $start_time = $last_stats_reports_time = $last_info_reports_time = time;
 while ( !$work_exit )
 {
-    if ( $run_time ) { last if time - $start_time > $run_time; }
+    if ( $run_time ) { last if gettimeofday - $start_time > $run_time; }
     last if $work_exit;
 
-    {
-        my $id          = ( !$receive and $rate ) ? get_exponentially_id() : int( rand $max_lists );
-        $list_id        = sprintf( '%0'.VISITOR_ID_LEN.'d', $id );
-#        $timestamp1     = new Benchmark;
-        $time_before    = gettimeofday;
-        my @ret         = $receive ? $coll->receive( $list_id ) : $coll->insert( $item, $list_id );
-#        $timestamp2     = new Benchmark;
-        $time_after     = gettimeofday;
-        redo unless @ret;
-    }
-#    my( undef, $pu, $ps, undef, undef, undef ) = @{ timediff( $timestamp2, $timestamp1 ) };
-#    my ( $pr, $undef, undef, undef, undef, undef ) = @{ timediff( $timestamp2, $timestamp1 ) };
-#    $secs += $pu + $ps;
-#    $secs += $pr;
+    my $id          = ( !$receive and $rate ) ? get_exponentially_id() : int( rand $max_lists );
+    $list_id        = sprintf( '%0'.VISITOR_ID_LEN.'d', $id );
+    $time_before    = gettimeofday;
+    my @ret         = $receive ? $coll->receive( $list_id ) : $coll->insert( $item, $list_id );
+    $time_after     = gettimeofday;
     $secs += $time_after - $time_before;
     ++$count;
 
-    if ( time - $last_stats_reports_time > PORTION_TIME )
+    my $time_from_stats = $time_after - $last_stats_reports_time;
+    if ( $time_from_stats > PORTION_TIME )
     {
-        $last_stats_reports_time = time;
         print '[', scalar localtime, '] ',
             $receive ? 'reads' : 'inserts', ', ',
+#            "$time_from_stats after stats, $secs operation sec, ",
             $secs ? sprintf( '%d', int( $count / $secs ) ) : 'N/A', ' op/sec ',
             ' ' x 5, "\r";
+
+        if ( gettimeofday - $last_info_reports_time > INFO_TIME )
+        {
+            redis_info();
+            $last_info_reports_time = gettimeofday;
+        }
+
         $secs  = 0;
         $count = 0;
-    }
-
-    if ( time - $last_info_reports_time > INFO_TIME )
-    {
-        $last_info_reports_time = time;
-        redis_info();
+        $last_stats_reports_time = gettimeofday;
     }
 }
 

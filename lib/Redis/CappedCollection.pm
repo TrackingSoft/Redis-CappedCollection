@@ -351,9 +351,9 @@ subtype __PACKAGE__.'::NonNegInt',
     message { ( $_ || '' ).' is not a non-negative integer!' }
     ;
 
-subtype __PACKAGE__.'::NonEmptStr',
+subtype __PACKAGE__.'::NonEmptNameStr',
     as 'Str',
-    where { $_ ne '' },
+    where { $_ ne '' and $_ !~ /:/ },
     message { ( $_ || '' ).' is not a non-empty string!' }
     ;
 
@@ -440,7 +440,7 @@ sub BUILD {
 has 'name' => (
     is          => 'ro',
     clearer     => '_clear_name',
-    isa         => __PACKAGE__.'::NonEmptStr',
+    isa         => __PACKAGE__.'::NonEmptNameStr',
     default     => sub { return $uuid->create_str },
     );
 
@@ -458,7 +458,7 @@ has 'size_garbage'              => (
     default     => 0,
     trigger     => sub {
                         my $self = shift;
-                        $self->size_garbage <= $self->size || $self->_throw( EMISMATCHARG );
+                        $self->size_garbage <= $self->size || $self->_throw( EMISMATCHARG, 'size_garbage' );
                     },
     );
 
@@ -471,7 +471,7 @@ has 'max_datasize'      => (
                         if ( $self->_redis )
                         {
                             $self->max_datasize <= ( $self->_maxmemory ? min( $self->_maxmemory, MAX_DATASIZE ) : MAX_DATASIZE )
-                                || $self->_throw( EMISMATCHARG );
+                                || $self->_throw( EMISMATCHARG, 'max_datasize' );
                         }
                     },
     );
@@ -549,14 +549,15 @@ sub insert {
     my $data_id     = shift // '';
     my $data_time   = shift // scalar gettimeofday;
 
-    $data                                                   // $self->_throw( EMISMATCHARG );
-    ( defined( _STRING( $data ) ) or $data eq '' )          || $self->_throw( EMISMATCHARG );
-    _STRING( $list_id )                                     // $self->_throw( EMISMATCHARG );
-    ( defined( _STRING( $data_id ) ) or $data_id eq '' )    || $self->_throw( EMISMATCHARG );
-    ( defined( _NUMBER( $data_time ) ) and $data_time > 0 ) || $self->_throw( EMISMATCHARG );
+    $data                                                   // $self->_throw( EMISMATCHARG, 'data' );
+    ( defined( _STRING( $data ) ) or $data eq '' )          || $self->_throw( EMISMATCHARG, 'data' );
+    _STRING( $list_id )                                     // $self->_throw( EMISMATCHARG, 'list_id' );
+    $list_id !~ /:/                                         || $self->_throw( EMISMATCHARG, 'list_id' );
+    ( defined( _STRING( $data_id ) ) or $data_id eq '' )    || $self->_throw( EMISMATCHARG, 'data_id' );
+    ( defined( _NUMBER( $data_time ) ) and $data_time > 0 ) || $self->_throw( EMISMATCHARG, 'data_time' );
 
     my $data_len = bytes::length( $data );
-    $self->size and ( ( $data_len <= $self->size )          || $self->_throw( EMISMATCHARG ) );
+    $self->size and ( ( $data_len <= $self->size )          || $self->_throw( EMISMATCHARG, 'data' ) );
     ( $data_len <= $self->max_datasize )                    || $self->_throw( EDATATOOLARGE );
 
     $self->_set_last_errorcode( ENOERROR );
@@ -589,13 +590,13 @@ sub update {
     my $data_id     = shift;
     my $data        = shift;
 
-    _STRING( $list_id )                             // $self->_throw( EMISMATCHARG );
-    defined( _STRING( $data_id ) )                  || $self->_throw( EMISMATCHARG );
-    $data                                           // $self->_throw( EMISMATCHARG );
-    ( defined( _STRING( $data ) ) or $data eq '' )  || $self->_throw( EMISMATCHARG );
+    _STRING( $list_id )                             // $self->_throw( EMISMATCHARG, 'list_id' );
+    defined( _STRING( $data_id ) )                  || $self->_throw( EMISMATCHARG, 'data_id' );
+    $data                                           // $self->_throw( EMISMATCHARG, 'data' );
+    ( defined( _STRING( $data ) ) or $data eq '' )  || $self->_throw( EMISMATCHARG, 'data' );
 
     my $data_len = bytes::length( $data );
-    $self->size and ( ( $data_len <= $self->size )  || $self->_throw( EMISMATCHARG ) );
+    $self->size and ( ( $data_len <= $self->size )  || $self->_throw( EMISMATCHARG, 'data' ) );
     ( $data_len <= $self->max_datasize )            || $self->_throw( EDATATOOLARGE );
 
     $self->_set_last_errorcode( ENOERROR );
@@ -624,14 +625,14 @@ sub receive {
     my $list_id     = shift;
     my $data_id     = shift;
 
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG );
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
 
     $self->_set_last_errorcode( ENOERROR );
 
     my $data_key = $self->_data_list_key( $list_id );
     if ( defined( $data_id ) and $data_id ne '' )
     {
-        _STRING( $data_id ) // $self->_throw( EMISMATCHARG );
+        _STRING( $data_id ) // $self->_throw( EMISMATCHARG, 'data_id' );
         return $self->_call_redis( 'HGET', $data_key, $data_id );
     }
     else
@@ -702,7 +703,7 @@ sub exists {
     my $self        = shift;
     my $list_id     = shift;
 
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG );
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
 
     $self->_set_last_errorcode( ENOERROR );
 
@@ -713,7 +714,7 @@ sub lists {
     my $self        = shift;
     my $pattern     = shift // '*';
 
-    _STRING( $pattern ) // $self->_throw( EMISMATCHARG );
+    _STRING( $pattern ) // $self->_throw( EMISMATCHARG, 'pattern' );
 
     $self->_set_last_errorcode( ENOERROR );
 
@@ -789,17 +790,18 @@ sub _verify_collection {
     if ( $status_exist )
     {
         $self->_set_size( $size ) unless $self->size;
-        $size           == $self->size          or $self->_throw( EMISMATCHARG );
-        $older_allowed  == $self->older_allowed or $self->_throw( EMISMATCHARG );
+        $size           == $self->size          or $self->_throw( EMISMATCHARG, 'size' );
+        $older_allowed  == $self->older_allowed or $self->_throw( EMISMATCHARG, 'older_allowed' );
     }
 }
 
 sub _throw {
     my $self    = shift;
     my $err     = shift;
+    my $prefix  = shift;
 
     $self->_set_last_errorcode( $err );
-    confess $ERROR[ $err ];
+    confess ( $prefix ? "$prefix : " : '' ).$ERROR[ $err ];
 }
 
 sub _redis_exception {
@@ -896,18 +898,18 @@ This documentation refers to C<Redis::CappedCollection> version 0.01
     my $coll = Redis::CappedCollection->new( redis => $server );
 
     #-- Producer
-    my $id = $coll->insert( 'Some data stuff' );
+    my $list_id = $coll->insert( 'Some data stuff' );
 
-    # Change the zero element of the list with the ID $id
-    $id = $coll->update( $id, 0, 'Some new data stuff' );
+    # Change the element of the list with the ID $list_id
+    $updated = $coll->update( $list_id, $data_id, 'Some new data stuff' );
 
     #-- Consumer
-    # Get data from a list with the ID $id
-    @data = $coll->receive( $id );
+    # Get data from a list with the ID $list_id
+    @data = $coll->receive( $list_id );
     # or to obtain the data in the order they are received
-    while ( my ( $id, $data ) = $coll->pop_oldest )
+    while ( my ( $list_id, $data ) = $coll->pop_oldest )
     {
-        print "List '$id' had '$data'\n";
+        print "List '$list_id' had '$data'\n";
     }
 
 To see a brief but working code example of the C<Redis::CappedCollection>
@@ -952,18 +954,16 @@ Simple methods for organizing producer and consumer clients.
 =back
 
 Capped collections are fixed sized collections that have a auto-FIFO
-age-out feature (age out is based on insertion order).
+age-out feature (age out is based on the time the corresponding inserted data).
 With the built-in FIFO mechanism, you are not at risk of using
 excessive disk space.
-Capped collections keep data in their insertion order automatically
-(in the respective lists of data).
+Capped collections keep data in their time the corresponding inserted data order
+automatically (in the respective lists of data).
 Capped collections automatically maintain insertion order for the data lists
 in the collection.
-The collection contains the lists containing the data in the order they
-are received.
 
 You may insert new data in the capped collection.
-If there is a list with the ID, the data is inserted into the end of the list,
+If there is a list with the ID, the data is inserted into the existed list,
 or to a new list.
 
 You may update the existing data in the collection.
@@ -1015,6 +1015,11 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # may exceed 'size'
                         # (Default 0 - additional data
                         # should not be released).
+        max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
+                        # (Default 512MB).
+        older_allowed   => 0, # Permission to add data with time is less
+                        # than the data time of which was deleted from the list.
+                        # (Default 0 - insert too old data is prohibited).
         );
 
 Requirements for arguments C<name>, C<size>, described in more detail
@@ -1022,6 +1027,7 @@ in the sections relating to the methods L</name>, L</size> .
 
 If the value of C<name> specified, the work is done with a given collection
 or create a collection with the specified name.
+Do not use the symbol C<':'> in C<name>.
 
 The following examples illustrate other uses of the C<new> method:
 
@@ -1040,7 +1046,7 @@ An error will cause the program to halt (C<confess>) if an argument is not valid
 ATTENTION: In the L<Redis|Redis> module the synchronous commands throw an
 exception on receipt of an error reply, or return a non-error reply directly.
 
-=head3 C<insert( $data, $id )>
+=head3 C<insert( $data, $list_id, $data_id, $data_time )>
 
 Adds data to the capped collection on the Redis server.
 
@@ -1052,45 +1058,54 @@ Data is added to the existing list, if the second argument is specified
 and the corresponding queue already exists.
 Otherwise, the data is added to a new queue for which ID is the second argument.
 ID in the second argument must be a non-empty string (if specified).
+Do not use the symbol C<':'> in C<$list_id>.
+
 If the second argument is not specified, the data is added to a new list
 with automatically generated ID (UUID).
+
+For a given data may be given the unique ID and the unique time.
+If the ID is not specified (or an empty string), it will be automatically
+generated in the form of sequential integer.
+Data ID must be unique for a list of data.
+
+Data ID must not be an empty string.
+
+Time must be a non-negative number. If time is not specified, it will be
+automatically generated as the result of a function call
+C<Time::HiRes::gettimeofday> in a scalar context.
+
 
 The following examples illustrate uses of the C<insert> method:
 
 In a scalar context, the method returns the ID of the data list to which
 you add the data.
 
-    $id = $coll->insert( 'Some data stuff', 'Some_id' );
+    $list_id = $coll->insert( 'Some data stuff', 'Some_id' );
     # or
-    $id = $coll->insert( 'Some data stuff' );
+    $list_id = $coll->insert( 'Some data stuff' );
 
 In a list context, the method returns the ID of the data list to which
-you add the data and the index position to which data is added after
-the insert operation.
+you add the data and the data ID corresponding to your data.
 
-    ( $id, $index ) = $coll->insert( 'Some data stuff', 'Some_id' );
+    ( $list_id, $data_id ) = $coll->insert( 'Some data stuff', 'Some_id' );
     # or
-    ( $id, $index ) = $coll->insert( 'Some data stuff' );
+    ( $list_id, $data_id ) = $coll->insert( 'Some data stuff' );
 
-In this case, the data list has length of C<$index + 1> items.
-
-=head3 C<update( $id, $index, $data )>
+=head3 C<update( $list_id, $data_id, $data )>
 
 Updates the data in the queue identified by the first argument.
 ID must be a non-empty string.
 
-Position updated data given as the second argument.
-Indexing position starts with 0.
-The C<$index> must be a non-negative integer (of any length).
-That is, a positive integer, or zero.
+The updated data ID given as the second argument.
+The C<$data_id> must be a non-empty string.
 
-Data obtained in the third argument.
+New data obtained in the third argument.
 Data should be a string whose length should not exceed the value available
 through the method L</max_datasize>.
 
 The following examples illustrate uses of the C<update> method:
 
-    if ( $coll->update( $id, 0, 'Some new data stuff' ) )
+    if ( $coll->update( $list_id, 0, 'Some new data stuff' ) )
     {
         print "Data updated successfully\n";
     }
@@ -1100,43 +1115,53 @@ The following examples illustrate uses of the C<update> method:
     }
 
 Method returns true if the data is updated or false if the queue with
-the given ID does not exist or is used an invalid index.
+the given ID does not exist or is used an invalid data ID.
 
-=head3 C<receive( $id, $index )>
+=head3 C<receive( $list_id, $data_id )>
 
-If the C<$index> argument is not specified:
+If the C<$data_id> argument is not specified or is an empty string:
+
+=over 3
+
+=item *
 
 In a list context, the method returns all the data from the list given by
-the C<$id> identifier.
-Data is returned in the order they are received in the list.
-Method returns an empty list if the list with the given id does not exist.
+the C<$list_id> identifier.
+If the C<$data_id> argument is an empty string than returns all data IDs and
+data values of the data list.
+Method returns an empty list if the list with the given ID does not exist.
+
+=item *
 
 In a scalar context, the method returns the length of the data list given by
-the C<$id> identifier.
+the C<$list_id> identifier.
 
-If the C<$index> argument is specified:
+=back
 
-The method returns the specified element of the list. The offsets
-are zero-based indexes, with 0 being the first element
-of the list, 1 being the next element and so on.
-Out of range indexes will not produce an error. For example, if C<$index>
-is larger than the end of the list, an empty list is returned.
+If the C<$data_id> argument is specified:
 
-C<$id> must be a non-empty string.
+=over 3
 
-The C<$index> must be a non-negative integer (of any length).
-That is, a positive integer, or zero.
+=item *
+
+The method returns the specified element of the data list.
+If the data with C<$data_id> ID does not exists, C<undef> is returned.
+
+=back
+
+C<$list_id> must be a non-empty string.
+C<$data_id> must to see as a normal string.
 
 The following examples illustrate uses of the C<receive> method:
 
-    my @data = $coll->receive( $id );
-    print "List '$id' has '$_'\n" foreach @data;
+    my @data = $coll->receive( $list_id );
+    print "List '$list_id' has '$_'\n" foreach @data;
     # or
-    my $list_len = $coll->receive( $id );
-    print "List '$id' has '$list_len' item(s)\n";
+    my $list_len = $coll->receive( $list_id );
+    print "List '$list_id' has '$list_len' item(s)\n";
     # or
-    my $data = $coll->receive( $id, 0 );
-    print "List '$id' has '$data' in zero position\n";
+    my $data = $coll->receive( $list_id, 0 );
+    print "List '$list_id' has '$data' in 'zero' position\n";
 
 =head3 C<pop_oldest>
 
@@ -1148,15 +1173,15 @@ The second element contains the extracted data.
 When retrieving data, they are removed from the collection.
 
 If you perform a C</pop_oldest> on the collection, the data will always
-be returned in insertion order.
+be returned in order of the time corresponding inserted data.
 
-Method returns an empty list if the collection does not contain any data
+Method returns an empty list if the collection does not contain any data.
 
 The following examples illustrate uses of the C<pop_oldest> method:
 
-    while ( my ( $id, $data ) = $coll->pop_oldest )
+    while ( my ( $list_id, $data ) = $coll->pop_oldest )
     {
-        print "List '$id' had '$data'\n";
+        print "List '$list_id' had '$data'\n";
     }
 
 =head3 C<validate>
@@ -1170,7 +1195,7 @@ Returns a list of three elements:
 
 =item *
 
-Size in bytes of all the data stored in all the lists collection.
+Size in bytes of all the data stored in all the collection lists.
 
 =item *
 
@@ -1188,23 +1213,51 @@ The following examples illustrate uses of the C<validate> method:
     print "An existing collection uses $length byte of data, ",
         "in $items items are placed in $lists lists\n";
 
-=head3 C<exists( $id )>
+=head3 C<exists( $list_id )>
 
 The method is designed to test whether there is a list of the collection with
-ID C<$id>.
+ID C<$list_id>.
 Returns true if the list exists and false otherwise.
 
 The following examples illustrate uses of the C<exists> method:
 
-    print "The collection has '$id' list\n" if $coll->exists( 'Some_id' );
+    print "The collection has '$list_id' list\n" if $coll->exists( 'Some_id' );
 
-=head3 C<lists>
+=head3 C<lists( $pattern )>
 
 Returns a list of identifiers list data stored in a collection.
+Returns all list IDs matching C<$pattern> if C<$pattern> is not empty.
+C<$patten> must be a non-empty string.
+
+Supported glob-style patterns:
+
+=over 3
+
+=item *
+
+C<h?llo> matches C<hello>, C<hallo> and C<hxllo>
+
+=item *
+
+C<h*llo> matches C<hllo> and C<heeeello>
+
+=item *
+
+C<h[ae]llo> matches C<hello> and C<hallo>, but not C<hillo>
+
+=back
+
+Use \ to escape special characters if you want to match them verbatim.
 
 The following examples illustrate uses of the C<lists> method:
 
     print "The collection has '$_' list\n" foreach $coll->lists;
+
+Warning: consider C<lists> as a command that should only be used in production
+environments with extreme care. It may ruin performance when it is executed
+against large databases.
+This command is intended for debugging and special operations.
+Don't use C<lists> in your regular application code.
 
 =head3 C<drop>
 
@@ -1219,6 +1272,12 @@ The following examples illustrate uses of the C<drop> method:
 
     $coll->drop;
 
+Warning: consider C<drop> as a command that should only be used in production
+environments with extreme care. It may ruin performance when it is executed
+against large databases.
+This command is intended for debugging and special operations.
+Don't use C<drop> in your regular application code.
+
 =head3 C<quit>
 
 Ask the Redis server to close the connection.
@@ -1226,29 +1285,6 @@ Ask the Redis server to close the connection.
 The following examples illustrate uses of the C<quit> method:
 
     $jq->quit;
-
-=head3 C<max_datasize>
-
-The method of access to the C<max_datasize> attribute.
-
-The method returns the current value of the attribute if called without arguments.
-
-Non-negative integer value can be used to specify a new value to
-the maximum size of the data introduced into the collection
-(methods L</insert> and L</update>).
-
-The C<max_datasize> attribute value is used in the L<constructor|/CONSTRUCTOR>
-and operations data entry on the Redis server.
-
-The L<constructor|/CONSTRUCTOR> uses the smaller of the values of 512MB and
-C<maxmemory> limit from a C<redis.conf> file.
-
-=head3 C<last_errorcode>
-
-The method of access to the code of the last identified errors.
-
-To see more description of the identified errors look at the L</DIAGNOSTICS>
-section.
 
 =head3 C<name>
 
@@ -1275,7 +1311,7 @@ a collection was created.
 
 The method of access to the C<size_garbage> attribute - the minimum size,
 in bytes, of the data to be released, if the size of the collection data
-after adding new data may exceed 'size' (Default 0 - additional data
+after adding new data may exceed L</size> (Default 0 - additional data
 should not be released).
 
 The C<size_garbage> attribute is designed to reduce the release of memory
@@ -1284,8 +1320,40 @@ operations with frequent data changes.
 The C<size_garbage> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
 
-The C<size_garbage> value may be less than or equal to C<size>. Otherwise 
+The C<size_garbage> value may be less than or equal to L</size>. Otherwise 
 an error will cause the program to halt (C<confess>).
+
+=head3 C<max_datasize>
+
+The method of access to the C<max_datasize> attribute.
+
+The method returns the current value of the attribute if called without arguments.
+
+Non-negative integer value can be used to specify a new value to
+the maximum size of the data introduced into the collection
+(methods L</insert> and L</update>).
+
+The C<max_datasize> attribute value is used in the L<constructor|/CONSTRUCTOR>
+and operations data entry on the Redis server.
+
+The L<constructor|/CONSTRUCTOR> uses the smaller of the values of 512MB and
+C<maxmemory> limit from a C<redis.conf> file.
+
+=head3 C<older_allowed>
+
+The method of access to the C<older_allowed> attribute -
+permission to add data with time is less than the data time of which was
+deleted from the data list. Default 0 - insert too old data is prohibited.
+
+The method returns the current value of the attribute.
+The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+=head3 C<last_errorcode>
+
+The method of access to the code of the last identified errors.
+
+To see more description of the identified errors look at the L</DIAGNOSTICS>
+section.
 
 =head2 EXPORT
 
@@ -1318,7 +1386,9 @@ The method for the possible error to analyse: L</last_errorcode>.
 
 A L<Redis|Redis> error will cause the program to halt (C<confess>).
 In addition to errors in the L<Redis|Redis> module detected errors
-L</EMISMATCHARG>, L</EDATATOOLARGE>, L</EMAXMEMORYPOLICY>, L</ECOLLDELETED>.
+L</EMISMATCHARG>, L</EDATATOOLARGE>, L</EMAXMEMORYPOLICY>, L</ECOLLDELETED>,
+L</EDATAIDEXISTS>, L</EOLDERTHANALLOWED>.
+
 All recognizable errors in C<Redis::CappedCollection> lead to
 the installation of the corresponding value in the L</last_errorcode> and cause
 an exception (C<confess>).
@@ -1369,8 +1439,7 @@ in the C<redis.conf> file.
 
 =item C<EMAXMEMORYPOLICY>
 
-This means that the collection element was removed by C<maxmemory-policy>
-in the C<redis.conf> file.
+This means that you are using the C<maxmemory-police all*> in the C<redis.conf> file.
 
 =item C<ECOLLDELETED>
 
@@ -1379,6 +1448,16 @@ This means that the system part of the collection was removed prior to use.
 =item C<EREDIS>
 
 This means that other Redis error message detected.
+
+=item C<EDATAIDEXISTS>
+
+This means that you are trying to insert data with an ID that is already in
+the data list.
+
+=item C<EOLDERTHANALLOWED>
+
+This means that you are trying to insert the data with the time less than
+the time of the data have been deleted from the data list.
 
 =back
 
@@ -1434,8 +1513,8 @@ The example shows a possible treatment for possible errors.
         }
         elsif ( $coll->last_errorcode == EMAXMEMORYPOLICY )
         {
-            # For example, return code to reinser the data
-            #return "to recreate look at $err";
+            # For example, return code to reinsert the data
+            #return "to reinsert look at $err";
         }
         elsif ( $coll->last_errorcode == ECOLLDELETED )
         {
@@ -1446,6 +1525,15 @@ The example shows a possible treatment for possible errors.
         {
             # Independently analyze the $err
         }
+        elsif ( $coll->last_errorcode == EDATAIDEXISTS )
+        {
+            # For example, return code to reinsert the data
+            #return "to reinsert with new data ID";
+        }
+        elsif ( $coll->last_errorcode == EOLDERTHANALLOWED )
+        {
+            # Independently analyze the situation
+        }
         else
         {
             # Unknown error code
@@ -1453,7 +1541,7 @@ The example shows a possible treatment for possible errors.
         die $err if $err;
     }
 
-    my ( $id, $coll, @data );
+    my ( $list_id, $coll, @data );
 
     eval {
         $coll = Redis::CappedCollection->new(
@@ -1470,15 +1558,15 @@ The example shows a possible treatment for possible errors.
     #-- New data
 
     eval {
-        $id = $coll->insert(
+        $list_id = $coll->insert(
             'Some data stuff',
             'Some_id',      # If not specified, it creates
                             # a new items list named as UUID
             );
-        print "Added data in a list with '", $id, "' id\n" );
+        print "Added data in a list with '", $list_id, "' id\n" );
 
-        # Change the zero element of the list with the ID $id
-        if ( $coll->update( $id, 0, 'Some new data stuff' ) )
+        # Change the "zero" element of the list with the ID $list_id
+        if ( $coll->update( $list_id, 0, 'Some new data stuff' ) )
         {
             print "Data updated successfully\n";
         }
@@ -1493,12 +1581,12 @@ The example shows a possible treatment for possible errors.
     #-- Fetching the data
 
     eval {
-        @data = $coll->receive( $id );
-        print "List '$id' has '$_'\n" foreach @data;
+        @data = $coll->receive( $list_id );
+        print "List '$list_id' has '$_'\n" foreach @data;
         # or to obtain the data in the order they are received
-        while ( my ( $id, $data ) = $coll->pop_oldest )
+        while ( my ( $list_id, $data ) = $coll->pop_oldest )
         {
-            print "List '$id' had '$data'\n";
+            print "List '$list_id' had '$data'\n";
         }
     };
     exception( $coll, $@ ) if $@;
@@ -1512,11 +1600,8 @@ The example shows a possible treatment for possible errors.
         print "An existing collection uses $length byte of data, ",
             "in $items items are placed in $lists lists\n";
 
-        print "The collection has '$id' list\n"
+        print "The collection has '$list_id' list\n"
             if $coll->exists( 'Some_id' );
-
-        print "Collection '", $coll->name, "' has '$_' list\n"
-            foreach $coll->lists;
     };
     exception( $coll, $@ ) if $@;
 
@@ -1557,13 +1642,16 @@ For example:
     4) "15"                     # the key value
     5) "lists"                  # hash key
     6) "1"                      # the key value
+    7) "items"                  # hash key
+    8) "1"                      # the key value
+    9) "older_allowed"          # hash key
+    10) "0"                     # the key value
 
     #-- To store the collection queue:
-    # LIST    Namespace:queue:Collection_id
+    # ZSET    Namespace:queue:Collection_id
 
 For example:
 
-    $ redis-cli
     redis 127.0.0.1:6379> KEYS Capped:queue:*
     1) "Capped:queue:89116152-C5BD-11E1-931B-0A690A986783"
     #      |     |                       |
@@ -1571,30 +1659,51 @@ For example:
     #  Fixed symbol of a queue           |
     #                        Capped Collection id (UUID)
     ...
-    redis 127.0.0.1:6379> LRANGE Capped:queue:89116152-C5BD-11E1-931B-0A690A986783 0 -1
+    redis 127.0.0.1:6379> ZRANGE Capped:queue:89116152-C5BD-11E1-931B-0A690A986783 0 -1 WITHSCORES
     1) "478B9C84-C5B8-11E1-A2C5-D35E0A986783"
-    #                    |
-    #          Oldest data list id (UUID)
+    2) "1348252575.6651001"|    |
+    #           |          |    |
+    #  Score: oldest data_time  |
+    #                   Member: Data List id (UUID)
     ...
 
     #-- To store the CappedCollection data:
-    # LIST    Namespace:L:Collection_id:DataList_id
+    # HASH    Namespace:I:Collection_id:DataList_id
+    # HASH    Namespace:D:Collection_id:DataList_id
+    # ZSET    Namespace:T:Collection_id:DataList_id
 
 For example:
 
-    $ redis-cli
-    redis 127.0.0.1:6379> KEYS Capped:L:*
-    1) "Capped:L:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
+    redis 127.0.0.1:6379> KEYS Capped:?:*
+    1) "Capped:I:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
+    2) "Capped:D:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
+    3) "Capped:T:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
     #     |    |                     |                       |
     # Namespace|                     |                       |
     # Fixed symbol of a list of data |                       |
     #                    Capped Collection id (UUID)         |
     #                                                Data list id (UUID)
     ...
-    redis 127.0.0.1:6379> LRANGE Capped:478B9C84-C5B8-11E1-A2C5-D35E0A986783 0 -1
-    1) "Some data stuff"
-    #          |
-    # Oldest data from a list of data
+    redis 127.0.0.1:6379> HGETALL Capped:I:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783
+    1) "next_data_id"           # hash key
+    2) "1"                      # the key value
+    3) "last_removed_time"      # hash key
+    4) "0"                      # the key value
+    5) "oldest_time"            # hash key
+    6) "1348252575.5906"        # the key value
+    7) "oldest_data_id"         # hash key
+    8) "0"                      # the key value
+
+    redis 127.0.0.1:6379> HGETALL Capped:D:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783
+    1) "0"                      # hash key: Data id
+    2) "Some stuff"             # the key value: Data
+
+    redis 127.0.0.1:6379> ZRANGE Capped:T:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783 0 -1 WITHSCORES
+    1) "0" ---------------+
+    2) "1348252575.5906"  |
+    #           |         |
+    #   Score: data_time  |
+    #              Member: Data id
     ...
 
 =head1 DEPENDENCIES
@@ -1632,15 +1741,15 @@ for all dependencies and compiling them manually).
 
 Need a Redis server version 2.6 or higher as module uses Redis Lua scripting.
 
-Full name of some Redis keys may not be known at the time of the call
-the Redis lua script (C<'EVAL'> or C<'EVALSHA'> command).
-So the Redis server may not be able to correctly forward the request
-to the appropriate node in the cluster.
-
 The use of C<maxmemory-police all*> in the C<redis.conf> file could lead to
 a serious (but hard to detect) problem as Redis server may delete
-the collection element. It could also clear the script cache. In such case
-we use the Redis server C<'EVAL'> command instead C<'EVALSHA'>.
+the collection element. Therefore the C<Redis::CappedCollection> not work with
+mode C<maxmemory-police all*> in the C<redis.conf>.
+
+Full name of some Redis keys may not be known at the time of the call
+the Redis Lua script (C<'EVAL'> or C<'EVALSHA'> command).
+So the Redis server may not be able to correctly forward the request
+to the appropriate node in the cluster.
 
 We strongly recommend using the option C<maxmemory> in the C<redis.conf> file if
 the data set may be large.

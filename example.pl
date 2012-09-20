@@ -19,6 +19,8 @@ use Redis::CappedCollection qw(
     EMAXMEMORYLIMIT
     ECOLLDELETED
     EREDIS
+    EDATAIDEXISTS
+    EOLDERTHANALLOWED
     );
 
 my $server = DEFAULT_SERVER.":".DEFAULT_PORT;   # the Redis Server
@@ -62,6 +64,15 @@ sub exception {
     elsif ( $coll->last_errorcode == EREDIS )
     {
         # Independently analyze the $err
+    }
+    elsif ( $coll->last_errorcode == EDATAIDEXISTS )
+    {
+        # For example, return code to reinsert the data
+        #return "to reinsert with new data ID";
+    }
+    elsif ( $coll->last_errorcode == EOLDERTHANALLOWED )
+    {
+        # Independently analyze the situation
     }
     else
     {
