@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 16;
+use Test::More tests => 22;
 
 BEGIN { use_ok 'Redis::CappedCollection' }
 
@@ -15,10 +15,12 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     insert
     update
     receive
-    validate
+    collection_info
+    info
     pop_oldest
     exists
     lists
+    drop_collection
     drop
     quit
 
@@ -26,6 +28,10 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     last_errorcode
     name
     size
+    advance_cleanup_bytes
+    advance_cleanup_num
+    older_allowed
+    big_data_threshold
     );
 
 my $val;

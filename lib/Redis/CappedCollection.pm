@@ -34,7 +34,6 @@ use Mouse::Util::TypeConstraints;
 use Carp;
 use Redis;
 use Data::UUID;
-use Time::HiRes     qw( gettimeofday );
 use Digest::SHA1    qw( sha1_hex );
 use List::Util      qw( min );
 use Params::Util    qw( _NONNEGINT _STRING _INSTANCE _NUMBER );
@@ -75,41 +74,6 @@ my @ERROR = (
 
 my $uuid = new Data::UUID;
 
-my %lua_script_body;
-my $_lua_cleaning = <<"END_CLEANING";
-        if redis.call( 'HGET', status_key, 'length' ) + size_delta > size then
-            local size_limit = size - size_garbage
-            while redis.call( 'EXISTS', status_key ) and redis.call( 'HGET', status_key, 'length' ) + size_delta > size_limit do
-                local vals              = redis.call( 'ZRANGE', queue_key, 0, 0 )
-                local excess_list_id    = vals[1]
-                local excess_info_key   = info_keys..':'..excess_list_id
-                local excess_data_key   = data_keys..':'..excess_list_id
-                local excess_time_key   = time_keys..':'..excess_list_id
-                local excess_data_id    = redis.call( 'HGET', excess_info_key, 'oldest_data_id' )
-                local excess_data       = redis.call( 'HGET', excess_data_key, excess_data_id )
-                local excess_data_len   = #excess_data
-                local excess_data_time  = redis.call( 'ZSCORE', excess_time_key, excess_data_id )
-                redis.call( 'HDEL',     excess_data_key, excess_data_id )
-                redis.call( 'HSET',     excess_info_key, 'last_removed_time', excess_data_time )
-                redis.call( 'HINCRBY',  status_key, 'items', -1 )
-                if redis.call( 'EXISTS', excess_data_key ) == 1 then
-                    redis.call( 'ZREM',     excess_time_key, excess_data_id )
-                    vals                    = redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )
-                    local oldest_data_id    = vals[1]
-                    local oldest_time       = vals[2]
-                    redis.call( 'HMSET',    excess_info_key, 'oldest_time', oldest_time, 'oldest_data_id', oldest_data_id )
-                    redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
-                else
-                    redis.call( 'DEL',      excess_info_key, excess_time_key )
-                    redis.call( 'HINCRBY',  status_key, 'lists', -1 )
-                    redis.call( 'ZREM',     queue_key, excess_list_id )
-                end
-                redis.call( 'HINCRBY', status_key, 'length', -excess_data_len )
-            end
-            list_exist = redis.call( 'EXISTS', data_key )
-        end
-END_CLEANING
-
 my $_lua_namespace  = "local namespace  = '".NAMESPACE."'";
 my $_lua_queue_key  = "local queue_key  = namespace..':queue:'..coll_name";
 my $_lua_status_key = "local status_key = namespace..':status:'..coll_name";
@@ -120,13 +84,284 @@ my $_lua_info_key   = "local info_key   = info_keys..':'..list_id";
 my $_lua_data_key   = "local data_key   = data_keys..':'..list_id";
 my $_lua_time_key   = "local time_key   = time_keys..':'..list_id";
 
+my %lua_script_body;
+my $_lua_list_type = <<"END_LIST_TYPE";
+-- Determine the current type of data storage list and the amount of data in the list
+-- 'zset' - data, date, time, metadata in separate structures
+-- 'hash' - all in one hash
+
+    -- converting to the comparisons that follow
+    big_data_threshold = tonumber( redis.call( 'HGET', status_key, 'big_data_threshold' ), 10 )
+    -- amount of data in the list need to know to sequential analysis at 'hash' mode
+    list_items   = 0
+
+    if redis.call( 'EXISTS', data_key ) == 1 then
+-- there is a characteristic element for 'zset'
+        list_type = 'zset'
+    else
+        if big_data_threshold == 0 then
+-- exactly 'zset'
+            list_type = 'zset'
+        else
+-- exactly 'hash'
+            list_type  = 'hash'
+            if list_exist ~= 0 then
+                -- information structure of of the list there
+                list_items = redis.call( 'HGET', info_key, '0' )
+                if list_items == nil then
+                    -- information on the list there are no
+                    list_exist = 0
+                    list_items = 0
+                else
+                    -- converting to the comparisons that follow
+                    list_items = tonumber( list_items, 10 )
+                end
+            end
+        end
+    end
+END_LIST_TYPE
+
+my $_lua_cleaning = <<"END_CLEANING";
+-- deleting old data to make room for new data
+-- storage type is not changed
+
+        local coll_length = redis.call( 'HGET', status_key, 'length' )
+        -- 'size_delta' - upcoming increase in the size of data (increasing the size of the new data when updating)
+        if coll_length + size_delta > size then
+            -- as to what size to make room
+            local size_limit    = size - advance_cleanup_bytes
+
+            -- how much data to delete obsolete data
+            local coll_items            = tonumber( redis.call( 'HGET', status_key, 'items' ), 10 )
+            local remaining_iterations  = advance_cleanup_num
+            if remaining_iterations == 0 or remaining_iterations > coll_items then
+                remaining_iterations = coll_items
+            end
+            local items_deleted = 0
+            local lists_deleted = 0
+            local bytes_deleted = 0
+
+            -- sign that had been removed from the list of where we plan to make changes
+            local own_data_removed = 0
+
+-- while there is data in the collection and there is insufficient space
+            while remaining_iterations > 0 do
+                remaining_iterations = remaining_iterations - 1
+
+-- Remember that the data can be removed from different lists, so associated with the data is estimated at each iteration of the loop
+
+                if coll_length + size_delta <= size_limit then
+                    break
+                end
+
+                -- identifier of the list with the oldest data
+                local vals              = redis.call( 'ZRANGE', queue_key, 0, 0 )
+
+-- continue to work with the excess (requiring removal) data and for them using the prefix 'excess_'
+                local excess_list_id    = vals[1]
+                -- key data structures in the mode 'zset'
+                local excess_info_key   = info_keys..':'..excess_list_id
+                local excess_data_key   = data_keys..':'..excess_list_id
+                local excess_time_key   = time_keys..':'..excess_list_id
+
+                -- variables that characterize the data
+                local excess_data_id
+                local excess_data
+                local excess_data_len
+                local excess_data_time
+
+                -- variables that characterize the type of storage and data mode 'hash'
+                local excess_list_type
+                local excess_list_items
+                local excess_i
+
+-- determine the type of storage for disposal
+                -- simply because sure that the data exists (the list identifier is present in the queue collection)
+                if redis.call( 'EXISTS', excess_data_key ) == 1 then
+                    -- there is a characteristic element for 'zset'
+                    excess_list_type = 'zset'
+                else
+                    excess_list_type = 'hash'
+                    -- converting to the comparisons that follow
+                    excess_list_items = tonumber( redis.call( 'HGET', excess_info_key, '0' ), 10 )
+                end
+
+                -- a sign of exhaustion list data
+                local list_was_deleted = 0
+
+-- remove the oldest item
+                if excess_list_type == 'hash' then
+
+                    -- looking for the oldest data in the list, starting with the number 1
+                    -- initializing search
+                    excess_i = 1
+                    -- to reduce operation using '1.t' instead of excess_i..'.t'
+                    excess_data_time = redis.call( 'HGET', excess_info_key, '1.t' )
+                    local excess_times = { excess_data_time }
+                    -- search for other data
+                    for i = 2, excess_list_items do
+                        local new_t = redis.call( 'HGET', excess_info_key, i..'.t' )
+                        table.insert( excess_times, new_t )
+                        if new_t < excess_data_time then
+                            excess_i         = i
+                            excess_data_time = new_t
+                        end
+                    end
+
+                    -- characteristics of the oldest of the list
+                    local vals       = redis.call( 'HMGET', excess_info_key, excess_i..'.i', excess_i..'.d' )
+                    excess_data_id   = vals[1]
+                    excess_data      = vals[2]
+                    excess_data_len  = #excess_data
+
+                    -- actually remove the oldest this
+                    redis.call( 'HDEL', excess_info_key, excess_i..'.i', excess_i..'.d', excess_i..'.t' )
+                    if excess_list_id == list_id then
+                        -- had been removed from the list of where we plan to make changes
+                        own_data_removed = own_data_removed + 1
+                    end
+
+                    if excess_list_items > 1 then
+                        -- If the list has more data
+
+                        -- reordering data is not required when removing an element with the last one
+                        if excess_i ~= excess_list_items then
+                            -- if the element was removed from the list is not the last one
+
+                            -- obtain information about the list item with the last one
+                            local vals = redis.call( 'HMGET', excess_info_key, excess_list_items..'.i', excess_list_items..'.d', excess_list_items..'.t' )
+                            -- transfer the data of the last element in the position of the deleted item (to ensure continuity of item numbers)
+                            redis.call( 'HMSET', excess_info_key, excess_i..'.i', vals[1], excess_i..'.d', vals[2], excess_i..'.t', vals[3] )
+                            excess_times[ excess_i ] = excess_times[ excess_list_items ]
+                            -- remove the last item
+                            redis.call( 'HDEL', excess_info_key, excess_list_items..'.i', excess_list_items..'.d', excess_list_items..'.t' )
+
+                        end
+                        table.remove( excess_times )
+
+                        -- after removal, the number of list items decreased
+                        excess_list_items = excess_list_items - 1
+                        redis.call( 'HSET', excess_info_key, 0, excess_list_items )
+
+                        -- looking for this is the oldest in the remaining list
+                        local oldest_i = 1
+                        local oldest_time = excess_times[ oldest_i ]
+                        for i = 2, excess_list_items do
+                            local new_t = excess_times[ i ]
+                            if new_t < oldest_time then
+                                oldest_i    = i
+                                oldest_time = new_t
+                            end
+                        end
+
+                        -- obtain and store information about the oldest this list
+                        local oldest_data_id = redis.call( 'HGET', excess_info_key, oldest_i..'.i' )
+                        redis.call( 'HMSET',    excess_info_key, 't', oldest_time, 'i', oldest_data_id, 'l', excess_data_time )
+                        redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
+
+                    else
+                        -- If the list does not have data
+                        excess_list_items = 0
+                        list_was_deleted  = 1
+                        lists_deleted     = lists_deleted + 1
+
+                        -- delete the data storage structure list
+                        redis.call( 'DEL',      excess_info_key )
+
+                    end
+
+                else
+                    -- looking for the oldest data in the list ('zset' mode)
+                    excess_data_id   = redis.call( 'HGET', excess_info_key, 'i' )    -- oldest_data_id
+                    excess_data      = redis.call( 'HGET', excess_data_key, excess_data_id )
+                    excess_data_len  = #excess_data
+                    excess_data_time = redis.call( 'ZSCORE', excess_time_key, excess_data_id )
+
+                    -- actually remove the oldest item
+                    redis.call( 'HDEL', excess_data_key, excess_data_id )
+                    if excess_list_id == list_id then
+                        -- had been removed from the list of where we plan to make changes
+                        own_data_removed = own_data_removed + 1
+                    end
+
+                    if redis.call( 'EXISTS', excess_data_key ) == 1 then
+                        -- If the list has more data
+
+                        redis.call( 'ZREM', excess_time_key, excess_data_id )
+                        vals = redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )
+                        local oldest_data_id    = vals[1]
+                        local oldest_time       = vals[2]
+                        redis.call( 'HMSET',    excess_info_key, 't', oldest_time, 'i', oldest_data_id, 'l', excess_data_time )
+                        redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
+                    else
+                        -- If the list does not have data
+                        list_was_deleted = 1
+                        lists_deleted     = lists_deleted + 1
+
+                        -- delete the data storage structure list
+                        redis.call( 'DEL',      excess_info_key, excess_time_key )
+
+                    end
+                end
+                -- amount of data collection decreased
+                items_deleted = items_deleted + 1
+                coll_items = coll_items - 1
+
+                if list_was_deleted == 1 then
+                    -- remove the name of the list from the queue collection
+                    redis.call( 'ZREM',     queue_key, excess_list_id )
+                end
+
+                -- consider changing the size of the data collection
+                bytes_deleted   = bytes_deleted + excess_data_len
+                coll_length     = coll_length - excess_data_len
+            end
+
+            if items_deleted ~= 0 then
+                -- reduce the number of items in the collection
+                redis.call( 'HINCRBY', status_key, 'items', -items_deleted )
+            end
+            if lists_deleted ~= 0 then
+                -- reduce the number of lists stored in a collection
+                redis.call( 'HINCRBY',  status_key, 'lists', -lists_deleted )
+            end
+            if bytes_deleted ~= 0 then
+                -- reduce the data on the volume of data
+                redis.call( 'HINCRBY', status_key, 'length', -bytes_deleted )
+            end
+
+-- because be removed the own list data:
+-- refine the existence of a list and number of data
+            if own_data_removed ~= 0 then
+                if list_type == 'hash' then
+                    list_items = list_items - own_data_removed
+                    if list_items == 0 then
+                       list_exist = 0
+                    end
+                else
+                    list_exist = redis.call( 'EXISTS', info_key )
+                end
+            end
+
+        end
+END_CLEANING
+
 $lua_script_body{insert} = <<"END_INSERT";
-local coll_name         = ARGV[1]
-local size_garbage      = ARGV[2] + 0
-local list_id           = ARGV[3]
-local data_id           = ARGV[4]
-local data              = ARGV[5]
-local data_time         = ARGV[6] + 0
+-- adding data to a list of collections
+
+local coll_name             = ARGV[1]
+-- converting to the comparisons that follow
+local size                  = tonumber( ARGV[2], 10 )
+local advance_cleanup_bytes = tonumber( ARGV[3], 10 )
+local advance_cleanup_num   = tonumber( ARGV[4], 10 )
+local big_data_threshold    = tonumber( ARGV[5], 10 )
+local list_id               = ARGV[6]
+local data_id               = ARGV[7]
+local data                  = ARGV[8]
+-- converting to the comparisons that follow
+local data_time             = tonumber( ARGV[9], 10 )
+
+-- key data storage structures
 $_lua_namespace
 $_lua_queue_key
 $_lua_status_key
@@ -136,71 +371,190 @@ $_lua_time_keys
 $_lua_info_key
 $_lua_data_key
 $_lua_time_key
+
+-- determine whether there is a list of data and a collection
 local status_exist      = redis.call( 'EXISTS', status_key )
-local list_exist        = redis.call( 'EXISTS', data_key )
+local list_exist        = redis.call( 'EXISTS', info_key )
+
+-- initialize the data returned from the script
 local error             = 0
 local result_data_id    = 0
+
+-- if there is a collection
 if status_exist == 1 then
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+    -- Features added data
     local data_len      = #data
+    -- upcoming increase in the size of data of the collection
     local size_delta    = data_len
-    local size          = redis.call( 'HGET', status_key, 'size' ) + 0
+
+-- deleting obsolete data, if it can be necessary
     if size > 0 then
         $_lua_cleaning
     end
+
+-- form the identifier added data
     if data_id == '' then
         if list_exist ~= 0 then
-            result_data_id = redis.call( 'HGET', info_key, 'next_data_id' )
+            result_data_id = redis.call( 'HGET', info_key, 'n' )
+    -- else
+    -- otherwise, the value of the initialization
         end
     else
         result_data_id = data_id
     end
-    if redis.call( 'HEXISTS', data_key, result_data_id ) == 1 then
-        error = 8               -- EDATAIDEXISTS
+
+-- verification of the existence of old data with new data identifier
+    if list_type == 'zset' then
+        if redis.call( 'HEXISTS', data_key, result_data_id ) == 1 then
+            error = 8               -- EDATAIDEXISTS
+        end
+    else
+        for i = 1, list_items do
+            if redis.call( 'HGET', info_key, i..'.i' ) == result_data_id then
+                error = 8           -- EDATAIDEXISTS
+                break
+            end
+        end
     end
+
     if error == 0 then
+
+-- Validating time new data, if required
         if redis.call( 'HGET', status_key, 'older_allowed' ) ~= '1' then
             if list_exist ~= 0 then
-                local last_removed_time = redis.call( 'HGET', info_key, 'last_removed_time' ) + 0
+                local last_removed_time = tonumber( redis.call( 'HGET', info_key, 'l' ), 10 )
                 if last_removed_time > 0 and data_time <= last_removed_time then
                     error = 9   -- EOLDERTHANALLOWED
                 end
             end
         end
+
+-- add data to the list
         if error == 0 then
+-- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
+
+-- ready to add data
+
+            -- control for testing the case of the new list
+            local oldest_time = 1
             if list_exist == 0 then
-                redis.call( 'HMSET',    info_key, 'next_data_id', 0, 'last_removed_time', 0, 'oldest_time', 0, 'oldest_data_id', '' )
+                -- create information structure data list, if the list does not exist
+                oldest_time = 0
+                redis.call( 'HMSET',    info_key, 'n', 0, 'l', 0, 't', oldest_time, 'i', '' )
+                -- reflect the establishment of the new list
                 redis.call( 'HINCRBY',  status_key, 'lists', 1 )
             end
-                if data_id == '' then
-                    redis.call( 'HINCRBY', info_key, 'next_data_id', 1 )
-                end
+
+            -- If the ID data has been generated on the basis of the internal counter list
+            if data_id == '' then
+                -- prepare the counter for the next generation data identifier
+                redis.call( 'HINCRBY', info_key, 'n', 1 )
+            end
+
+            -- add the amount of new data to the size of the data collection
             redis.call( 'HINCRBY', status_key, 'length', data_len )
+
+            -- initialize the maximum amount of data and the number of items in the collection (the new list)
             if redis.call( 'HEXISTS', status_key, 'size' ) == 0 then
                 redis.call( 'HMSET', status_key, 'size', size, 'items', 0 )
             end
-            redis.call( 'HSET',     data_key, result_data_id, data )
+
+            -- reflect the addition of new data
             redis.call( 'HINCRBY',  status_key, 'items', 1 )
-            redis.call( 'ZADD',     time_key, data_time, result_data_id )
-            local oldest_time       = redis.call( 'HGET', info_key, 'oldest_time' ) + 0
-            if data_time < oldest_time or oldest_time == 0 then
-                redis.call( 'HMSET', info_key, 'oldest_time', data_time, 'oldest_data_id', result_data_id )
-                if redis.call( 'HEXISTS', info_key, 'next_data_id' ) == 0 then
-                        redis.call( 'HSET', info_key, 'next_data_id', 0 )
+
+-- actually add data to the list
+            if list_type == 'zset' then
+
+                -- amount of data in the list
+                local tlen = redis.call( 'ZCARD', time_key )
+                local future_len = tlen + 1
+
+                -- convert the list 'zset' to 'hash', if necessary
+                if future_len <= big_data_threshold then
+                    -- create a counter of the number of data in the list
+                    redis.call( 'HSET', info_key, 0, future_len )
+
+                    -- Transfers data from the structure 'zset' to structure 'hash'
+                    for i = 1, tlen do
+                        local vals = redis.call( 'ZRANGE', time_key, i - 1, i - 1, 'WITHSCORES' )
+                        redis.call( 'HMSET', info_key, i..'.i', vals[1], i..'.d', redis.call( 'HGET', data_key, vals[1] ), i..'.t', vals[2] )
+                    end
+                    -- reflect the addition of data
+                    redis.call( 'HMSET', info_key, future_len..'.i', result_data_id, future_len..'.d', data, future_len..'.t', data_time )
+
+                    -- delete the list data structure 'zset'
+                    redis.call( 'DEL', data_key, time_key )
+                else
+                    -- reflect the addition of data
+                    redis.call( 'HSET', data_key, result_data_id, data )
+                    redis.call( 'ZADD', time_key, data_time, result_data_id )
                 end
+
+            else
+
+                -- amount of data in the list above has been increased
+                list_items = list_items + 1
+
+                -- convert the list 'hash' to 'zset', if necessary
+                if list_items > big_data_threshold then
+                    for i = 1, list_items - 1 do
+                        -- Transfers data from the structure 'hash' to structure 'zset'
+                        local vals = redis.call( 'HMGET', info_key, i..'.i', i..'.d', i..'.t' )
+                        redis.call( 'ZADD', time_key, vals[3], vals[1] )
+                        redis.call( 'HSET', data_key, vals[1], vals[2] )
+
+                        -- delete the record of the 'hash' in the list
+                        redis.call( 'HDEL', info_key, i..'.i', i..'.d', i..'.t' )
+                    end
+                    -- reflect the addition of data
+                    redis.call( 'ZADD', time_key, data_time, result_data_id )
+                    redis.call( 'HSET', data_key, result_data_id, data )
+
+                    -- remove the count of the number of data
+                    redis.call( 'HDEL', info_key, 0 )
+                else
+                    -- reflect the addition of data
+                    redis.call( 'HMSET', info_key, 0, list_items, list_items..'.i', result_data_id, list_items..'.d', data, list_items..'.t', data_time )
+                end
+            end
+
+-- correct the data on the oldest list data if the oldest data added
+            if oldest_time ~= 0 then
+                -- if a list existed, then the oldest of this could change
+                oldest_time = tonumber( redis.call( 'HGET', info_key, 't' ), 10 )
+            end
+            if data_time < oldest_time or oldest_time == 0 then
+                redis.call( 'HMSET', info_key, 't', data_time, 'i', result_data_id )
                 redis.call( 'ZADD', queue_key, data_time, list_id )
             end
+
         end
     end
 end
+
 return { error, status_exist, result_data_id }
 END_INSERT
 
 $lua_script_body{update} = <<"END_UPDATE";
-local coll_name     = ARGV[1]
-local size_garbage  = ARGV[2] + 0
-local list_id       = ARGV[3]
-local data_id       = ARGV[4]
-local data          = ARGV[5]
+-- update the data in the list of collections
+
+local coll_name             = ARGV[1]
+-- converting to the comparisons that follow
+local size                  = tonumber( ARGV[2], 10 )
+local advance_cleanup_bytes = tonumber( ARGV[3], 10 )
+local advance_cleanup_num   = tonumber( ARGV[4], 10 )
+local big_data_threshold    = tonumber( ARGV[5], 10 )
+local list_id               = ARGV[6]
+local data_id               = ARGV[7]
+local data                  = ARGV[8]
+
+-- key data storage structures
 $_lua_namespace
 $_lua_queue_key
 $_lua_status_key
@@ -210,139 +564,628 @@ $_lua_time_keys
 $_lua_info_key
 $_lua_data_key
 $_lua_time_key
+
+-- determine whether there is a list of data and a collection
 local status_exist  = redis.call( 'EXISTS', status_key )
-local list_exist    = redis.call( 'EXISTS', data_key )
-local error         = 0
+local list_exist    = redis.call( 'EXISTS', info_key )
+
+-- initialize the data returned from the script
 local ret           = 0
+
+-- if there is a collection
 if status_exist == 1 then
-    if redis.call( 'HEXISTS', data_key, data_id ) == 1 then
-        local data_len      = #data
-        local cur_data      = redis.call( 'HGET', data_key, data_id )
-        local cur_data_len  = #cur_data
-        local size_delta    = data_len - cur_data_len
-        local size          = redis.call( 'HGET', status_key, 'size' ) + 0
-        if size > 0 then
-            $_lua_cleaning
-        end
-        if list_exist ~= 0 and redis.call( 'HEXISTS', data_key, data_id ) == 1 then
-            ret = redis.call( 'HSET', data_key, data_id, data )
-            if ret == 0 then
-                redis.call( 'HINCRBY', status_key, 'length', size_delta )
-                ret = 1
-            else
-                ret = 0
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+    -- properties of the data that will be replaced
+    local data_exist
+    local data_i
+    if list_type == 'zset' then
+        data_exist = redis.call( 'HEXISTS', data_key, data_id )
+    else
+        data_exist = 0
+        for i = 1, list_items do
+            if redis.call( 'HGET', info_key, i..'.i' ) == data_id then
+                data_exist = 1
+                data_i     = i
+                break
             end
         end
     end
+
+-- Change the data, if they exist
+    if data_exist == 1 then
+
+-- ready to change data
+
+        -- amount of new data
+        local data_len = #data
+
+        -- determine the size of the data that will be replaced
+        local cur_data
+        if list_type == 'zset' then
+            cur_data = redis.call( 'HGET', data_key, data_id )
+        else
+            cur_data = redis.call( 'HGET', info_key, data_i..'.d' )
+        end
+        local cur_data_len = #cur_data
+
+        -- upcoming increase in the size of data of the collection (increasing the size of the new data when updating)
+        local size_delta   = data_len - cur_data_len
+
+-- deleting obsolete data, if it can be necessary
+        if size > 0 then
+            $_lua_cleaning
+        end
+
+-- data change
+-- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
+        if list_exist ~= 0 then
+            if redis.call( 'HEXISTS', data_key, data_id ) == 1 then
+                -- data to be changed were not removed
+
+                -- actually change
+                ret = redis.call( 'HSET', data_key, data_id, data )
+                -- Return value:
+                --      1 if field is a new field in the hash and value was set.
+                --      0 if field already exists in the hash and the value was updated.
+
+                -- amount of data in the list
+                local tlen = redis.call( 'ZCARD', time_key )
+                -- when the data changes, the list can only shorten and the list can be changed only from 'zset' to 'hash'
+                -- convert the list 'zset' to 'hash', if necessary
+                if tlen <= big_data_threshold then
+                    -- create a counter of the number of data in the list
+                    redis.call( 'HSET', info_key, 0, tlen )
+
+                    -- Transfers data from the structure 'zset' to structure 'hash'
+                    for i = 1, tlen do
+                        local vals = redis.call( 'ZRANGE', time_key, i - 1, i - 1, 'WITHSCORES' )
+                        redis.call( 'HMSET', info_key, i..'.i', vals[1], i..'.d', redis.call( 'HGET', data_key, vals[1] ), i..'.t', vals[2] )
+                    end
+
+                    -- delete the list data structure 'zset'
+                    redis.call( 'DEL', data_key, time_key )
+                end
+
+                if ret == 0 then
+                    -- add the increase in the size of data to the size of the data collection
+                    redis.call( 'HINCRBY', status_key, 'length', size_delta )
+                    ret = 1
+                else
+                    -- sort of a mistake
+                    ret = 0
+                end
+
+            else
+                -- if exchanged data is not removed, they should be in the list of 'hash'
+                for i = 1, list_items do
+                    if redis.call( 'HGET', info_key, i..'.i' ) == data_id then
+                        -- actually change
+                        if redis.call( 'HSET', info_key, i..'.d', data ) == 0 then
+                            -- Return value:
+                            --      1 if field is a new field in the hash and value was set.
+                            --      0 if field already exists in the hash and the value was updated.
+
+                            -- add the increase in the size of data to the size of the data collection
+                            redis.call( 'HINCRBY', status_key, 'length', size_delta )
+                            ret = 1
+                        else
+                            -- sort of a mistake
+                            ret = 0
+                        end
+                        break
+                    end
+                end
+            end
+        end
+
+    end
 end
+
 return { status_exist, ret }
 END_UPDATE
 
-$lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
-local coll_name         = ARGV[1]
+$lua_script_body{receive} = <<"END_RECEIVE";
+-- returns the data from the list
+
+local coll_name             = ARGV[1]
+-- converting to the comparisons that follow
+local big_data_threshold    = tonumber( ARGV[2], 10 )
+local list_id               = ARGV[3]
+local mode                  = ARGV[4]
+local data_id               = ARGV[5]
+
+-- key data storage structures
 $_lua_namespace
-$_lua_queue_key
 $_lua_status_key
 $_lua_info_keys
 $_lua_data_keys
-$_lua_time_keys
-local status_exist      = redis.call( 'EXISTS', status_key )
-local queue_exist       = redis.call( 'EXISTS', queue_key )
-local excess_list_exist = 0
-local excess_list_id    = false
-local excess_data       = false
-if queue_exist == 1 and status_exist == 1 then
-    excess_list_id          = redis.call( 'ZRANGE', queue_key, 0, 0 )[1]
-    local excess_info_key   = info_keys..':'..excess_list_id
-    local excess_data_key   = data_keys..':'..excess_list_id
-    local excess_time_key   = time_keys..':'..excess_list_id
-    excess_list_exist       = redis.call( 'EXISTS', excess_data_key )
-    local excess_data_id    = redis.call( 'HGET', excess_info_key, 'oldest_data_id' )
-    excess_data             = redis.call( 'HGET', excess_data_key, excess_data_id )
-    local excess_data_len   = #excess_data
-    local excess_data_time  = redis.call( 'ZSCORE', excess_time_key, excess_data_id )
-    redis.call( 'HDEL',     excess_data_key, excess_data_id )
-    redis.call( 'HSET', excess_info_key, 'last_removed_time', excess_data_time )
-    redis.call( 'HINCRBY',  status_key, 'items', -1 )
-    if redis.call( 'EXISTS', excess_data_key ) == 1 then
-        redis.call( 'ZREM', excess_time_key, excess_data_id )
-        local oldest_data_id
-        local oldest_time
-        local vals      = redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )
-        oldest_data_id  = vals[1]
-        oldest_time     = vals[2]
-        redis.call( 'HMSET',    excess_info_key, 'oldest_time', oldest_time, 'oldest_data_id', oldest_data_id )
-        redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
+$_lua_info_key
+$_lua_data_key
+
+-- determine whether there is a list of data and a collection
+local status_exist  = redis.call( 'EXISTS', status_key )
+local list_exist    = redis.call( 'EXISTS', info_key )
+
+-- if there is a collection
+if status_exist == 1 then
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+    if mode == 'val' then
+-- returns the specified element of the data list
+
+        if list_type == 'zset' then
+            return redis.call( 'HGET', data_key, data_id )
+        else
+            for i = 1, list_items do
+                if redis.call( 'HGET', info_key, i..'.i' ) == data_id then
+                    return redis.call( 'HGET', info_key, i..'.d' )
+                end
+            end
+            return nil
+        end
+
+    elseif mode == 'len' then
+-- returns the length of the data list
+
+        if list_type == 'zset' then
+            return redis.call( 'HLEN', data_key )
+        else
+            return redis.call( 'HGET', info_key, '0' )
+        end
+
+    elseif mode == 'vals' then
+-- returns all the data from the list
+
+        if list_type == 'zset' then
+            return redis.call( 'HVALS', data_key )
+        else
+            local ret = {}
+            for i = 1, list_items do
+                table.insert( ret, redis.call( 'HGET', info_key, i..'.d' ) )
+            end
+            return ret
+        end
+
+    elseif mode == 'all' then
+-- returns all data IDs and data values of the data list
+
+        if list_type == 'zset' then
+            return redis.call( 'HGETALL', data_key )
+        else
+            local ret = {}
+            for i = 1, list_items do
+                vals = redis.call( 'HMGET', info_key, i..'.i', info_key, i..'.d' )
+                table.insert( ret, vals[1] )
+                table.insert( ret, vals[2] )
+            end
+            return ret
+        end
+
     else
-        redis.call( 'DEL',      excess_info_key, excess_time_key )
-        redis.call( 'HINCRBY',  status_key, 'lists', -1 )
-        redis.call( 'ZREM',     queue_key, excess_list_id )
+        -- sort of a mistake
+        return nil
     end
-    redis.call( 'HINCRBY', status_key, 'length', -excess_data_len )
 end
-return { queue_exist, status_exist, excess_list_exist, excess_list_id, excess_data }
+
+return { status_exist, false, false, false }
+END_RECEIVE
+
+$lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
+-- retrieve the oldest data stored in the collection
+
+local coll_name             = ARGV[1]
+-- converting to the comparisons that follow
+local big_data_threshold    = tonumber( ARGV[2], 10 )
+
+-- key data storage structures
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+
+-- determine whether there is a list of data and a collection
+local status_exist  = redis.call( 'EXISTS', status_key )
+local queue_exist   = redis.call( 'EXISTS', queue_key )
+
+-- initialize the data returned from the script
+local list_exist    = 0
+local list_id       = false
+local data          = false
+
+-- if the collection exists and contains data
+if queue_exist == 1 and status_exist == 1 then
+
+    -- identifier of the list with the oldest data
+    list_id = redis.call( 'ZRANGE', queue_key, 0, 0 )[1]
+
+    -- key data storage structures
+    $_lua_info_keys
+    $_lua_data_keys
+    $_lua_time_keys
+    $_lua_info_key
+    $_lua_data_key
+    $_lua_time_key
+
+    -- determine whether there is a list of data and a collection
+    list_exist = redis.call( 'EXISTS', info_key )
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+    -- Features the oldest data
+    local data_id = redis.call( 'HGET', info_key, 'i' )
+    local data_time
+    local data_i
+
+    -- a sign of exhaustion list data
+    local list_was_deleted = 0
+
+-- get data
+    if list_type == 'zset' then
+
+        -- actually get data
+        data = redis.call( 'HGET', data_key, data_id )
+        data_time = redis.call( 'ZSCORE', time_key, data_id )
+
+        -- delete the data from the list
+        redis.call( 'HDEL', data_key, data_id )
+        -- remember the time of remote data
+        redis.call( 'HSET', info_key, 'l', data_time )
+
+        if redis.call( 'EXISTS', data_key ) == 1 then
+            -- If the list has more data
+
+            -- delete the information about the time of the data
+            redis.call( 'ZREM', time_key, data_id )
+
+            -- obtain information about the data that have become the oldest
+            local vals = redis.call( 'ZRANGE', time_key, 0, 0, 'WITHSCORES' )
+            local oldest_data_id    = vals[1]
+            local oldest_time       = vals[2]
+
+            -- stores information about the data that have become the oldest
+            redis.call( 'HMSET',    info_key, 't', oldest_time, 'i', oldest_data_id, 'l', data_time )
+            redis.call( 'ZADD',     queue_key, oldest_time, list_id )
+
+            -- amount of data in the list
+            local tlen = redis.call( 'ZCARD', time_key )
+            -- when the data poped, the list can only shorten and the list can be changed only from 'zset' to 'hash'
+            -- convert the list 'zset' to 'hash', if necessary
+            if tlen <= big_data_threshold then
+                -- create a counter of the number of data in the list
+                redis.call( 'HSET', info_key, 0, tlen )
+
+                -- Transfers data from the structure 'zset' to structure 'hash'
+                for i = 1, tlen do
+                    local vals = redis.call( 'ZRANGE', time_key, i - 1, i - 1, 'WITHSCORES' )
+                    redis.call( 'HMSET', info_key, i..'.i', vals[1], i..'.d', redis.call( 'HGET', data_key, vals[1] ), i..'.t', vals[2] )
+                end
+
+                -- delete the list data structure 'zset'
+                redis.call( 'DEL', data_key, time_key )
+            end
+
+        else
+            -- if the list is no more data
+            list_was_deleted  = 1
+
+            -- delete the list data structure 'zset'
+            redis.call( 'DEL',      info_key, time_key )
+
+        end
+
+    else
+        -- looking for the oldest data in the list ('hash' mode)
+
+        -- get data
+        for i = 1, list_items do
+            if redis.call( 'HGET', info_key, i..'.i' ) == data_id then
+                local vals = redis.call( 'HMGET', info_key, i..'.d', i..'.t' )
+                data       = vals[1]
+                data_time  = vals[2]
+                data_i     = i
+                -- delete the data from the list
+                redis.call( 'HDEL', info_key, i..'.i', i..'.d', i..'.t' )
+                break
+            end
+        end
+
+        if list_items > 1 then
+            -- If the list has more data
+
+            -- reordering data is not required when removing an element with the last one
+            if data_i ~= list_items then
+                -- if the element was removed from the list is not the last one
+
+                -- obtain information about the list item with the last one
+                local vals = redis.call( 'HMGET', info_key, list_items..'.i', list_items..'.d', list_items..'.t' )
+                -- transfer the data of the last element in the position of the deleted item (to ensure continuity of item numbers)
+                redis.call( 'HMSET', info_key, data_i..'.i', vals[1], data_i..'.d', vals[2], data_i..'.t', vals[3] )
+                -- remove the last item
+                redis.call( 'HDEL', info_key, list_items..'.i', list_items..'.d', list_items..'.t' )
+
+            end
+
+            -- after removal, the number of list items decreased
+            list_items = list_items - 1
+            redis.call( 'HSET', info_key, 0, list_items )
+
+            -- looking for this is the oldest in the remaining list
+            local oldest_i = 1
+            local oldest_time = redis.call( 'HGET', info_key, '1.t' )
+            for i = 2, list_items do
+                local new_t = redis.call( 'HGET', info_key, i..'.t' )
+                if new_t < oldest_time then
+                    oldest_i    = i
+                    oldest_time = new_t
+                end
+            end
+
+            -- obtain and store information about the oldest this list
+            local oldest_data_id = redis.call( 'HGET', info_key, oldest_i..'.i' )
+            redis.call( 'HMSET',    info_key, 't', oldest_time, 'i', oldest_data_id, 'l', data_time )
+            redis.call( 'ZADD',     queue_key, oldest_time, list_id )
+
+        else
+            -- if the list is no more data
+            list_items        = 0
+            list_was_deleted  = 1
+
+            -- delete the data storage structure list
+            redis.call( 'DEL',      info_key )
+
+        end
+    end
+
+    if list_was_deleted == 1 then
+        -- reduce the number of lists stored in a collection
+        redis.call( 'HINCRBY',  status_key, 'lists', -1 )
+        -- remove the name of the list from the queue collection
+        redis.call( 'ZREM',     queue_key, list_id )
+    end
+
+-- reduce the data on the volume of data and the number of items in the collection
+    redis.call( 'HINCRBY', status_key, 'length', -#data )
+    redis.call( 'HINCRBY', status_key, 'items', -1 )
+
+end
+
+return { queue_exist, status_exist, list_exist, list_id, data }
 END_POP_OLDEST
 
-$lua_script_body{validate} = <<"END_VALIDATE";
+$lua_script_body{collection_info} = <<"END_COLLECTION_INFO";
+-- to obtain information on the status of the collection
+
 local coll_name     = ARGV[1]
+
+-- key data storage structures
 $_lua_namespace
 $_lua_queue_key
 $_lua_status_key
-local status_exist  = redis.call( 'EXISTS', status_key )
-if status_exist == 1 then
-    local length = redis.call( 'HGET', status_key, 'length' )
-    local lists  = redis.call( 'HGET', status_key, 'lists' )
-    local items  = redis.call( 'HGET', status_key, 'items' )
-    return { status_exist, length, lists, items }
-end
-return { status_exist, false, false, false }
-END_VALIDATE
 
-$lua_script_body{drop} = <<"END_DROP";
-local coll_name         = ARGV[1]
+-- determine whether there is a collection
+local status_exist  = redis.call( 'EXISTS', status_key )
+
+-- if there is a collection
+if status_exist == 1 then
+    local vals      = redis.call( 'HMGET', status_key, 'length', 'lists', 'items' )
+    local oldest    = redis.call( 'ZRANGE', queue_key, 0, 0, 'WITHSCORES' )
+    local oldest_time = oldest[2]
+    oldest_time = oldest_time
+    return { status_exist, vals[1], vals[2], vals[3], oldest_time }
+end
+
+return { status_exist, false, false, false, false }
+END_COLLECTION_INFO
+
+$lua_script_body{info} = <<"END_INFO";
+-- to obtain information on the status of the data list
+
+local coll_name             = ARGV[1]
+-- converting to the comparisons that follow
+local big_data_threshold    = tonumber( ARGV[2], 10 )
+local list_id               = ARGV[3]
+
+-- key data storage structures
+$_lua_namespace
+$_lua_status_key
+$_lua_info_keys
+$_lua_info_key
+
+-- determine whether there is a list of data and a collection
+local status_exist  = redis.call( 'EXISTS', status_key )
+local list_exist    = redis.call( 'EXISTS', info_key )
+
+-- initialize the data returned from the script
+local items             = false
+local oldest_time       = false
+local last_removed_time = false
+
+-- if there is a collection
+if status_exist == 1 and list_exist == 1 then
+
+    -- key data storage structures
+    $_lua_data_keys
+    $_lua_data_key
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+    -- the length of the data list
+    if list_type == 'zset' then
+        items = redis.call( 'HLEN', data_key )
+    else
+        items = redis.call( 'HGET', info_key, '0' )
+    end
+
+    -- If you want to return a float from Lua you should return it as a string, exactly like Redis itself does
+    oldest_time       = redis.call( 'HGET', info_key, 't' )
+    last_removed_time = redis.call( 'HGET', info_key, 'l' )
+
+end
+
+return { status_exist, items, oldest_time, last_removed_time }
+END_INFO
+
+$lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
+-- to remove the entire collection
+
+local coll_name     = ARGV[1]
+
+-- key data storage structures
 $_lua_namespace
 $_lua_queue_key
 $_lua_status_key
 $_lua_info_keys
 $_lua_data_keys
 $_lua_time_keys
-local ret           = 0
-local arr
+
+-- initialize the data returned from the script
+local ret           = 0     -- the number of deleted items
+
+-- remove the control structures of the collection
 if redis.call( 'EXISTS', status_key ) == 1 then
     ret = ret + redis.call( 'DEL', queue_key, status_key )
 end
-arr = redis.call( 'KEYS', info_keys..':*' )
+
+-- each element of the list are deleted separately, as total number of items may be too large to send commands 'DEL'
+
+local arr = redis.call( 'KEYS', info_keys..':*' )
 if #arr > 0 then
+
+-- delete information hashes of lists
     for i = 1, #arr do
         ret = ret + redis.call( 'DEL', arr[i] )
     end
+
+-- remove structures store data lists
     local patterns = { data_keys, time_keys }
-    local key
-    local i
     for k = 1, #patterns do
         arr = redis.call( 'KEYS', patterns[k]..':*' )
         for i = 1, #arr do
             ret = ret + redis.call( 'DEL', arr[i] )
         end
     end
+
 end
+
 return ret
+END_DROP_COLLECTION
+
+$lua_script_body{drop} = <<"END_DROP";
+-- to remove the data_list
+
+local coll_name     = ARGV[1]
+-- converting to the comparisons that follow
+local big_data_threshold    = tonumber( ARGV[2], 10 )
+local list_id               = ARGV[3]
+
+-- key data storage structures
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+$_lua_info_keys
+$_lua_info_key
+
+-- determine whether there is a list of data and a collection
+local status_exist  = redis.call( 'EXISTS', status_key )
+local list_exist    = redis.call( 'EXISTS', info_key )
+
+-- initialize the data returned from the script
+local ret           = 0     -- the number of deleted items
+
+-- if there is a collection
+if status_exist == 1 and list_exist == 1 then
+
+    -- key data storage structures
+    $_lua_data_keys
+    $_lua_time_keys
+    $_lua_data_key
+    $_lua_time_key
+
+-- Determine the current type of data storage list and the amount of data in the list
+    local list_type
+    local list_items
+    $_lua_list_type
+
+-- determine the size of the data in the list and delete the list structure
+    local bytes_deleted = 0
+    if list_type == 'zset' then
+        local vals = redis.call( 'HVALS', data_key )
+        list_items = #vals
+        for i = 1, list_items do
+            bytes_deleted   = bytes_deleted + #vals[ i ]
+        end
+        redis.call( 'DEL', info_key, data_key, time_key )
+    else
+        local data
+        for i = 1, list_items do
+            data            = redis.call( 'HGET', info_key, i..'.d' )
+            bytes_deleted   = bytes_deleted + #data
+        end
+        redis.call( 'DEL', info_key )
+    end
+
+    -- reduce the data on the volume of data
+    redis.call( 'HINCRBY',  status_key, 'length', -bytes_deleted )
+    -- reduce the number of items in the collection
+    redis.call( 'HINCRBY',  status_key, 'items', -list_items )
+    -- reduce the number of lists stored in a collection
+    redis.call( 'HINCRBY',  status_key, 'lists', -1 )
+    -- remove the name of the list from the queue collection
+    redis.call( 'ZREM',     queue_key, list_id )
+
+    -- list is removed successfully
+    ret = 1
+
+end
+
+return { status_exist, ret }
 END_DROP
 
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
-local coll_name     = ARGV[1]
-local size          = ARGV[2]
-local older_allowed = ARGV[3]
+-- creation of the collection and characterization of the collection by accessing existing collection
+
+local coll_name          = ARGV[1]
+local size               = ARGV[2]
+local older_allowed      = ARGV[3]
+local big_data_threshold = ARGV[4]
+
+-- key data storage structures
 $_lua_namespace
 $_lua_status_key
+
+-- determine whether there is a collection
 local status_exist  = redis.call( 'EXISTS', status_key )
+
 if status_exist == 1 then
-    size            = redis.call( 'HGET', status_key, 'size' )
-    older_allowed   = redis.call( 'HGET', status_key, 'older_allowed' )
+-- if there is a collection
+
+    local vals = redis.call( 'HMGET', status_key, 'size', 'older_allowed', 'big_data_threshold' )
+    size                = vals[1]
+    older_allowed       = vals[2]
+    big_data_threshold  = vals[3]
+
 else
-    redis.call( 'HMSET', status_key, 'size', size, 'length', 0, 'lists', 0, 'items', 0, 'older_allowed', older_allowed )
+-- if you want to create a new collection
+
+    redis.call( 'HMSET', status_key, 'size', size, 'length', 0, 'lists', 0, 'items', 0, 'older_allowed', older_allowed, 'big_data_threshold', big_data_threshold )
+
 end
-return { status_exist, size, older_allowed }
+
+return { status_exist, size, older_allowed, big_data_threshold }
 END_VERIFY_COLLECTION
 
 subtype __PACKAGE__.'::NonNegInt',
@@ -437,14 +1280,14 @@ sub BUILD {
 
 #-- public attributes ----------------------------------------------------------
 
-has 'name' => (
+has 'name'                  => (
     is          => 'ro',
     clearer     => '_clear_name',
     isa         => __PACKAGE__.'::NonEmptNameStr',
     default     => sub { return $uuid->create_str },
     );
 
-has 'size'              => (
+has 'size'                  => (
     reader      => 'size',
     writer      => '_set_size',
     clearer     => '_clear_size',
@@ -452,17 +1295,23 @@ has 'size'              => (
     default     => 0,
     );
 
-has 'size_garbage'              => (
+has 'advance_cleanup_bytes' => (
     is          => 'rw',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 0,
     trigger     => sub {
                         my $self = shift;
-                        $self->size_garbage <= $self->size || $self->_throw( EMISMATCHARG, 'size_garbage' );
+                        $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' );
                     },
     );
 
-has 'max_datasize'      => (
+has 'advance_cleanup_num'   => (
+    is          => 'rw',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+    );
+
+has 'max_datasize'          => (
     is          => 'rw',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => MAX_DATASIZE,
@@ -476,13 +1325,19 @@ has 'max_datasize'      => (
                     },
     );
 
-has 'older_allowed' => (
+has 'older_allowed'         => (
     is          => 'ro',
     isa         => 'Bool',
     default     => 1,
     );
 
-has 'last_errorcode'    => (
+has 'big_data_threshold'    => (
+    is          => 'ro',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+    );
+
+has 'last_errorcode'        => (
     reader      => 'last_errorcode',
     writer      => '_set_last_errorcode',
     isa         => 'Int',
@@ -491,7 +1346,7 @@ has 'last_errorcode'    => (
 
 #-- private attributes ---------------------------------------------------------
 
-has '_server'           => (
+has '_server'               => (
     is          => 'rw',
     init_arg    => 'redis',
     isa         => 'Str',
@@ -503,14 +1358,14 @@ has '_server'           => (
                     },
     );
 
-has '_redis'            => (
+has '_redis'                => (
     is          => 'rw',
 # 'Maybe[Test::RedisServer]' to test only
     isa         => 'Maybe[Redis] | Maybe[Test::RedisServer]',
     init_arg    => undef,
     );
 
-has '_maxmemory' => (
+has '_maxmemory'            => (
     is          => 'rw',
     isa         => __PACKAGE__.'::NonNegInt',
     init_arg    => undef,
@@ -525,14 +1380,14 @@ foreach my $attr_name ( qw(
     _time_keys
     ) )
 {
-    has $attr_name => (
+    has $attr_name          => (
         is          => 'rw',
         isa         => 'Str',
         init_arg    => undef,
         );
 }
 
-has '_lua_scripts' => (
+has '_lua_scripts'          => (
     is          => 'ro',
     isa         => 'HashRef[Str]',
     lazy        => 1,
@@ -547,7 +1402,7 @@ sub insert {
     my $data        = shift;
     my $list_id     = shift // $uuid->create_str;
     my $data_id     = shift // '';
-    my $data_time   = shift // scalar gettimeofday;
+    my $data_time   = shift // time;
 
     $data                                                   // $self->_throw( EMISMATCHARG, 'data' );
     ( defined( _STRING( $data ) ) or $data eq '' )          || $self->_throw( EMISMATCHARG, 'data' );
@@ -566,7 +1421,10 @@ sub insert {
         $self->_lua_script_cmd( 'insert' ),
         0,
         $self->name,
-        $self->size_garbage,
+        $self->size,
+        $self->advance_cleanup_bytes,
+        $self->advance_cleanup_num,
+        $self->big_data_threshold,
         $list_id,
         $data_id,
         $data,
@@ -605,7 +1463,10 @@ sub update {
         $self->_lua_script_cmd( 'update' ),
         0,
         $self->name,
-        $self->size_garbage,
+        $self->size,
+        $self->advance_cleanup_bytes,
+        $self->advance_cleanup_num,
+        $self->big_data_threshold,
         $list_id,
         $data_id,
         $data,
@@ -629,21 +1490,44 @@ sub receive {
 
     $self->_set_last_errorcode( ENOERROR );
 
-    my $data_key = $self->_data_list_key( $list_id );
     if ( defined( $data_id ) and $data_id ne '' )
     {
         _STRING( $data_id ) // $self->_throw( EMISMATCHARG, 'data_id' );
-        return $self->_call_redis( 'HGET', $data_key, $data_id );
+        return $self->_call_redis(
+            $self->_lua_script_cmd( 'receive' ),
+            0,
+            $self->name,
+            $self->big_data_threshold,
+            $list_id,
+            'val',
+            $data_id,
+            );
     }
     else
     {
         if ( wantarray )
         {
-            return $self->_call_redis( defined( $data_id ) ? 'HGETALL' : 'HVALS', $data_key );
+            return $self->_call_redis(
+                $self->_lua_script_cmd( 'receive' ),
+                0,
+                $self->name,
+                $self->big_data_threshold,
+                $list_id,
+                defined( $data_id ) ? 'all' : 'vals',
+                '',
+                );
         }
         else
         {
-            return $self->_call_redis( 'HLEN', $data_key );
+            return $self->_call_redis(
+                $self->_lua_script_cmd( 'receive' ),
+                0,
+                $self->name,
+                $self->big_data_threshold,
+                $list_id,
+                'len',
+                '',
+                );
         }
     }
 }
@@ -659,6 +1543,7 @@ sub pop_oldest {
             $self->_lua_script_cmd( 'pop_oldest' ),
             0,
             $self->name,
+            $self->big_data_threshold,
             );
 
     if ( $queue_exist )
@@ -679,13 +1564,13 @@ sub pop_oldest {
     return @ret;
 }
 
-sub validate {
+sub collection_info {
     my $self        = shift;
 
     $self->_set_last_errorcode( ENOERROR );
 
     my @ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'validate' ),
+        $self->_lua_script_cmd( 'collection_info' ),
         0,
         $self->name,
         );
@@ -696,7 +1581,41 @@ sub validate {
         $self->_throw( ECOLLDELETED );
     }
 
-    return @ret;
+    return {
+        length      => $ret[0],
+        lists       => $ret[1],
+        items       => $ret[2],
+        oldest_time => $ret[3] ? $ret[3] + 0 : $ret[3],
+        };
+}
+
+sub info {
+    my $self        = shift;
+    my $list_id     = shift;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my @ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'info' ),
+        0,
+        $self->name,
+        $self->big_data_threshold,
+        $list_id,
+        );
+
+    unless ( shift @ret )
+    {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return {
+        items               => $ret[0],
+        oldest_time         => $ret[1] ? $ret[1] + 0 : $ret[1],
+        last_removed_time   => $ret[2] ? $ret[2] + 0 : $ret[2],
+        };
 }
 
 sub exists {
@@ -721,13 +1640,13 @@ sub lists {
     return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
 }
 
-sub drop {
+sub drop_collection {
     my $self        = shift;
 
     $self->_set_last_errorcode( ENOERROR );
 
     my $ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'drop' ),
+        $self->_lua_script_cmd( 'drop_collection' ),
         0,
         $self->name,
         );
@@ -735,6 +1654,31 @@ sub drop {
     $self->_clear_name;
     $self->_clear_size;
     $self->_clear_sha1;
+
+    return $ret;
+}
+
+sub drop {
+    my $self        = shift;
+    my $list_id     = shift;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my ( $status_exist, $ret ) = $self->_call_redis(
+        $self->_lua_script_cmd( 'drop' ),
+        0,
+        $self->name,
+        $self->big_data_threshold,
+        $list_id,
+        );
+
+    unless ( $status_exist )
+    {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
 
     return $ret;
 }
@@ -779,19 +1723,21 @@ sub _verify_collection {
 
     $self->_set_last_errorcode( ENOERROR );
 
-    my ( $status_exist, $size, $older_allowed ) = $self->_call_redis(
+    my ( $status_exist, $size, $older_allowed, $big_data_threshold ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
         0,
         $self->name,
         $self->size || 0,
         $self->older_allowed ? 1 : 0,
+        $self->big_data_threshold || 0,
         );
 
     if ( $status_exist )
     {
         $self->_set_size( $size ) unless $self->size;
-        $size           == $self->size          or $self->_throw( EMISMATCHARG, 'size' );
-        $older_allowed  == $self->older_allowed or $self->_throw( EMISMATCHARG, 'older_allowed' );
+        $size               == $self->size               or $self->_throw( EMISMATCHARG, 'size' );
+        $older_allowed      == $self->older_allowed      or $self->_throw( EMISMATCHARG, 'older_allowed' );
+        $big_data_threshold == $self->big_data_threshold or $self->_throw( EMISMATCHARG, 'big_data_threshold' );
     }
 }
 
@@ -801,7 +1747,7 @@ sub _throw {
     my $prefix  = shift;
 
     $self->_set_last_errorcode( $err );
-    confess ( $prefix ? "$prefix : " : '' ).$ERROR[ $err ];
+    confess( ( $prefix ? "$prefix : " : '' ).$ERROR[ $err ] );
 }
 
 sub _redis_exception {
@@ -972,6 +1918,8 @@ Once the space is fully utilized, newly added data will replace
 the oldest data in the collection.
 Limits are specified when the collection is created.
 
+Old data with the same time will be forced out in no specific order.
+
 The collection does not allow deleting data.
 
 Automatic Age Out:
@@ -1003,23 +1951,38 @@ This example illustrates a C<new()> call with all the valid arguments:
         name    => 'Some name', # If 'name' is not specified, it creates
                         # a new collection named as UUID.
                         # If specified, the work is done with
-                        # a given collection or a collection collection is
+                        # a given collection or a collection is
                         # created with the specified name.
         size            => 100_000, # The maximum size, in bytes,
-                        # of the capped collection data
-                        # (Default 0 - no limit).
+                        # of the capped collection data.
+                        # Default 0 - no limit.
                         # Is set for the new collection.
-        size_garbage    => 50_000, # The minimum size, in bytes,
+        advance_cleanup_bytes => 50_000, # The minimum size, in bytes,
                         # of the data to be released, if the size
                         # of the collection data after adding new data
                         # may exceed 'size'
-                        # (Default 0 - additional data
-                        # should not be released).
+                        # Default 0 - additional data should not be released.
+        advance_cleanup_num => 1_000, # Maximum number of times
+                        # the deleted data, if the size
+                        # of the collection data after adding new data
+                        # may exceed 'size'
+                        # Default 0 - the number of times the deleted data
+                        # is not limited.
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
-                        # (Default 512MB).
+                        # Default 512MB.
         older_allowed   => 0, # Permission to add data with time is less
                         # than the data time of which was deleted from the list.
-                        # (Default 0 - insert too old data is prohibited).
+                        # Default 0 - insert too old data is prohibited.
+                        # Is set for the new collection.
+        big_data_threshold => 0, # The maximum number of items of data to store
+                        # as a common hashes.
+                        # Default 0 - storage are separate hashes and
+                        # ordered lists.
+                        # Is set for the new collection.
+                        # To see a description of the used
+                        # Redis::CappedCollection data structure
+                        # (on Redis server) look at the
+                        # "CappedCollection data structure" section.
         );
 
 Requirements for arguments C<name>, C<size>, are described in more detail
@@ -1068,12 +2031,14 @@ If the ID is not specified (or an empty string), it will be automatically
 generated in the form of sequential integer.
 Data ID must be unique for a list of data.
 
-Data ID must not be an empty string.
-
 Time must be a non-negative number. If time is not specified, it will be
-automatically generated as the result of a function call
-C<Time::HiRes::gettimeofday> in a scalar context.
+automatically generated as the result of a function
+C<time>.
 
+For measuring time in better granularity than one second, use the
+L<Time::HiRes|Time::HiRes> module.
+In this case, time value is stored on the server as a floating point number
+within 4 decimal places.
 
 The following examples illustrate uses of the C<insert> method:
 
@@ -1129,6 +2094,8 @@ In a list context, the method returns all the data from the list given by
 the C<$list_id> identifier.
 If the C<$data_id> argument is an empty string than it returns all data IDs and
 data values of the data list.
+These returns are not ordered.
+
 Method returns an empty list if the list with the given ID does not exist.
 
 =item *
@@ -1172,7 +2139,7 @@ The first element contains the identifier of the list from which the data was re
 The second element contains the extracted data.
 When retrieving data, it is removed from the collection.
 
-If you perform a C</pop_oldest> on the collection, the data will always
+If you perform a C<pop_oldest> on the collection, the data will always
 be returned in order of the time corresponding inserted data.
 
 Method returns an empty list if the collection does not contain any data.
@@ -1184,34 +2151,67 @@ The following examples illustrate uses of the C<pop_oldest> method:
         print "List '$list_id' had '$data'\n";
     }
 
-=head3 C<validate>
+=head3 C<collection_info>
 
 The method is designed to obtain information on the status of the collection
 and to see how much space an existing collection uses.
 
-Returns a list of three elements:
+Returns a reference to a hash with the following elements:
 
 =over 3
 
 =item *
 
-Size in bytes of all the data stored in all the collection lists.
+C<length> - Size in bytes of all the data stored in all the collection lists.
 
 =item *
 
-Number of lists of data stored in a collection.
+C<lists> - Number of lists of data stored in a collection.
 
 =item *
 
-Number of data items stored in the collection.
+C<items> - Number of data items stored in the collection.
+
+=item *
+
+C<oldest_time> - Time corresponding to the oldest in the collection.
+C<undef> if the collection does not contain data.
 
 =back
 
-The following examples illustrate uses of the C<validate> method:
+The following examples illustrate uses of the C<collection_info> method:
 
-    my ( $length, $lists, $items ) = $coll->validate;
-    print "An existing collection uses $length byte of data, ",
-        "in $items items are placed in $lists lists\n";
+    my $info = $coll->collection_info;
+    print 'An existing collection uses ', $info->{length}, ' byte of data, ',
+        'in ', $info->{items}, ' items are placed in ',
+        $info->{lists}, ' lists', "\n";
+
+=head3 C<info( $list_id )>
+
+The method is designed to obtain information on the status of the data list
+and to see how many items it contains.
+
+C<$list_id> must be a non-empty string.
+
+Returns a reference to a hash with the following elements:
+
+=over 3
+
+=item *
+
+C<items> - Number of data items stored in the data list.
+
+=item *
+
+C<oldest_time> - Time corresponding to the oldest in the data list.
+C<undef> if the data list does not exists.
+
+=item *
+
+C<last_removed_time> - time corresponding to the latest data deleted from the list.
+C<undef> if the data list does not exists.
+
+=back
 
 =head3 C<exists( $list_id )>
 
@@ -1247,7 +2247,7 @@ C<h[ae]llo> matches C<hello> and C<hallo>, but not C<hillo>
 
 =back
 
-Use \ to escape special characters if you want to match them verbatim.
+Use C<'\'> to escape special characters if you want to match them verbatim.
 
 The following examples illustrate uses of the C<lists> method:
 
@@ -1259,24 +2259,42 @@ against large databases.
 This command is intended for debugging and special operations.
 Don't use C<lists> in your regular application code.
 
-=head3 C<drop>
+Methods C<lists> can cause an exception (C<confess>) if
+the collection contains a very large number of lists
+(C<'Error while reading from Redis server'>).
 
-Use the C</drop> method to remove the entire collection.
+=head3 C<drop_collection>
+
+Use the C<drop_collection> method to remove the entire collection.
 Method removes all the structures on the Redis server associated with
 the collection.
-After using C</drop> you must explicitly recreate the collection.
+After using C<drop_collection> you must explicitly recreate the collection.
 
 Before use, make sure that the collection is not being used by other customers.
 
-The following examples illustrate uses of the C<drop> method:
+The following examples illustrate uses of the C<drop_collection> method:
 
-    $coll->drop;
+    $coll->drop_collection;
 
-Warning: consider C<drop> as a command that should only be used in production
+Warning: consider C<drop_collection> as a command that should only be used in production
 environments with extreme care. It may ruin performance when it is executed
 against large databases.
 This command is intended for debugging and special operations.
-Don't use C<drop> in your regular application code.
+Don't use C<drop_collection> in your regular application code.
+
+Methods C<drop_collection> can cause an exception (C<confess>) if
+the collection contains a very large number of lists
+(C<'Error while reading from Redis server'>).
+
+=head3 C<drop( $list_id )>
+
+Use the C<drop> method to remove the entire specified list.
+Method removes all the structures on the Redis server associated with
+the specified list.
+
+C<$list_id> must be a non-empty string.
+
+Method returns true if the list is removed, or false otherwise.
 
 =head3 C<quit>
 
@@ -1307,21 +2325,34 @@ Is set for the new collection. Otherwise an error will cause the program to halt
 (C<confess>) if the value is not equal to the value that was used when
 a collection was created.
 
-=head3 C<size_garbage>
+=head3 C<advance_cleanup_bytes>
 
-The method of access to the C<size_garbage> attribute - the minimum size,
+The method of access to the C<advance_cleanup_bytes> attribute - the minimum size,
 in bytes, of the data to be released, if the size of the collection data
-after adding new data may exceed L</size> (Default 0 - additional data
-should not be released).
+after adding new data may exceed L</size>. Default 0 - additional data
+should not be released.
 
-The C<size_garbage> attribute is designed to reduce the release of memory
+The C<advance_cleanup_bytes> attribute is designed to reduce the release of memory
 operations with frequent data changes.
 
-The C<size_garbage> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The C<advance_cleanup_bytes> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
 
-The C<size_garbage> value may be less than or equal to L</size>. Otherwise 
+The C<advance_cleanup_bytes> value may be less than or equal to L</size>. Otherwise 
 an error will cause the program to halt (C<confess>).
+
+=head3 C<advance_cleanup_num>
+
+The method of access to the C<advance_cleanup_bytes> attribute - maximum number
+of times the deleted data, if the size of the collection data after adding
+new data may exceed C<size>. Default 0 - the number of times the deleted data
+is not limited.
+
+The C<advance_cleanup_num> attribute is designed to reduce the number of
+deletes data.
+
+The C<advance_cleanup_num> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The method returns and sets the current value of the attribute.
 
 =head3 C<max_datasize>
 
@@ -1347,6 +2378,30 @@ deleted from the data list. Default 0 - insert too old data is prohibited.
 
 The method returns the current value of the attribute.
 The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+=head3 C<big_data_threshold>
+
+The method of access to the C<big_data_threshold> attribute - the maximum number
+of items of data to store as a common hashes.
+Default 0 - storage are separate hashes and ordered lists.
+
+Can be used to save memory.
+It makes sense to use a small lists of data.
+Leads to a decrease in performance when using large lists of data.
+
+The method returns the current value of the attribute.
+The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+To see a description of the used C<Redis::CappedCollection> data structure
+(on Redis server) look at the L</CappedCollection data structure> section.
+
+The effective value of C<big_data_threshold> depends on the conditions the collection:
+the item size and length of lists, the size of data identifiers, etc.
+
+The effective value of C<big_data_threshold> can be controlled server settings
+(C<hahs-max-ziplist-entries>, C<hash-max-ziplist-value>,
+C<zset-max-ziplist-entries>, C<zset-max-ziplist-value>)
+in the C<redis.conf> file.
 
 =head3 C<last_errorcode>
 
@@ -1596,9 +2651,10 @@ The example shows a possible treatment for possible errors.
 
     my ( $length, $lists, $items );
     eval {
-        ( $length, $lists, $items ) = $coll->validate;
-        print "An existing collection uses $length byte of data, ",
-            "in $items items are placed in $lists lists\n";
+    my $info = $coll->collection_info;
+    print 'An existing collection uses ', $info->{length}, ' byte of data, ',
+        'in ', $info->{items}, ' items are placed in ',
+        $info->{lists}, ' lists', "\n";
 
         print "The collection has '$list_id' list\n"
             if $coll->exists( 'Some_id' );
@@ -1612,7 +2668,7 @@ The example shows a possible treatment for possible errors.
 
         # Before use, make sure that the collection
         # is not being used by other customers
-        #$coll->drop;
+        #$coll->drop_collection;
     };
     exception( $coll, $@ ) if $@;
 
@@ -1624,9 +2680,7 @@ While working on the Redis server creates and uses these data structures:
 
     #-- To store the collection status:
     # HASH    Namespace:status:Collection_id
-
-For example:
-
+    # For example:
     $ redis-cli
     redis 127.0.0.1:6379> KEYS Capped:status:*
     1) "Capped:status:89116152-C5BD-11E1-931B-0A690A986783"
@@ -1646,12 +2700,12 @@ For example:
     8) "1"                      # the key value
     9) "older_allowed"          # hash key
     10) "0"                     # the key value
+    11) "big_data_threshold"    # hash key
+    12) "0"                     # the key value
 
     #-- To store the collection queue:
     # ZSET    Namespace:queue:Collection_id
-
-For example:
-
+    # For example:
     redis 127.0.0.1:6379> KEYS Capped:queue:*
     1) "Capped:queue:89116152-C5BD-11E1-931B-0A690A986783"
     #      |     |                       |
@@ -1671,11 +2725,10 @@ For example:
     # HASH    Namespace:I:Collection_id:DataList_id
     # HASH    Namespace:D:Collection_id:DataList_id
     # ZSET    Namespace:T:Collection_id:DataList_id
-
-For example:
-
+    # For example:
     redis 127.0.0.1:6379> KEYS Capped:?:*
     1) "Capped:I:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
+    # If big_data_threshold = 0 or big_data_threshold > 0 and items on the list more than big_data_threshold
     2) "Capped:D:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
     3) "Capped:T:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783"
     #     |    |                     |                       |
@@ -1685,19 +2738,30 @@ For example:
     #                                                Data list id (UUID)
     ...
     redis 127.0.0.1:6379> HGETALL Capped:I:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783
-    1) "next_data_id"           # hash key
+    1) "n"                      # hash key (next_data_id)
     2) "1"                      # the key value
-    3) "last_removed_time"      # hash key
+    3) "l"                      # hash key (last_removed_time)
     4) "0"                      # the key value
-    5) "oldest_time"            # hash key
+    5) "t"                      # hash key (oldest_time)
     6) "1348252575.5906"        # the key value
-    7) "oldest_data_id"         # hash key
+    7) "i"                      # hash key (oldest_data_id)
     8) "0"                      # the key value
-
+    # If big_data_threshold > 0 and items on the list no more than big_data_threshold
+    9) "0"                      # hash key
+    10) "3"                     # the key value (items in the list)
+    11) "1.i"                   # hash key
+    12) "0"                     # the key value (Data id)
+    13) "1.d"                   # hash key
+    14) "Sume stuff"            # the key value (Data)
+    15) "1.t"                   # hash key
+    16) "1348252575.5906"       # the key value (data_time)
+    ...
+    # If big_data_threshold = 0 or big_data_threshold > 0 and items on the list more than big_data_threshold
     redis 127.0.0.1:6379> HGETALL Capped:D:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783
     1) "0"                      # hash key: Data id
     2) "Some stuff"             # the key value: Data
-
+    ...
+    # If big_data_threshold = 0 or big_data_threshold > 0 and items on the list more than big_data_threshold
     redis 127.0.0.1:6379> ZRANGE Capped:T:89116152-C5BD-11E1-931B-0A690A986783:478B9C84-C5B8-11E1-A2C5-D35E0A986783 0 -1 WITHSCORES
     1) "0" ---------------+
     2) "1348252575.5906"  |

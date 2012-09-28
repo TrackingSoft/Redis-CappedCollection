@@ -95,7 +95,8 @@ for ( my $i = 1; $i <= 10; ++$i )
 {
     @arr = ();
     push @arr, $_ for $i..10;
-    my @ret = $coll->receive( $i );
+    @arr = sort @arr;
+    my @ret = sort $coll->receive( $i );
     is "@arr", "@ret", "correct receive";
 }
 

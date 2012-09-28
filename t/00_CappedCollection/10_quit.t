@@ -67,7 +67,7 @@ $real_redis->quit;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -95,10 +95,10 @@ for ( my $i = 1; $i <= 10; ++$i )
 {
     ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 #-- all correct
 
@@ -122,9 +122,9 @@ ok $coll->_call_redis( "EXISTS", $queue_key ), "queue list exists";
 is $coll->name, "Some name",    "correct collection name";
 is $coll->size, 1_000_000,      "correct size";
 
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 }

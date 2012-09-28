@@ -26,6 +26,7 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -167,10 +168,10 @@ is $coll->_call_redis( "ZCOUNT", $queue_key, '-inf', '+inf' ), 4, "correct list 
 is $coll->_call_redis( "HGET", $status_key, 'lists' ), 4, "correct status value";
 
 $list_key = NAMESPACE.":I:".$saved_name.':ID';
-is $coll->_call_redis( "HGET", $list_key, 'next_data_id' ), 3, "correct info value";
-is $coll->_call_redis( "HGET", $list_key, 'last_removed_time' ), 0, "correct info value";
-ok( $coll->_call_redis( "HGET", $list_key, 'oldest_time' ) > 0, "correct info value" );
-is $coll->_call_redis( "HGET", $list_key, 'oldest_data_id' ), 0, "correct info value";
+is $coll->_call_redis( "HGET", $list_key, 'n' ), 3, "correct info value";
+is $coll->_call_redis( "HGET", $list_key, 'l' ), 0, "correct info value";
+ok( $coll->_call_redis( "HGET", $list_key, 't' ) > 0, "correct info value" );
+is $coll->_call_redis( "HGET", $list_key, 'i' ), 0, "correct info value";
 
 $list_key = NAMESPACE.":D:".$saved_name.':ID';
 is $coll->_call_redis( "HLEN", $list_key ), 3, "correct data number";
@@ -184,9 +185,9 @@ foreach my $type ( qw( I D T ) )
     is( scalar( @arr ), 4, "correct number of lists created" );
 }
 
-@arr = $coll->_call_redis( "ZRANGE", $queue_key, 0, -1 );
+@arr = sort $coll->_call_redis( "ZRANGE", $queue_key, 0, -1 );
 $tmp = "@arr";
-@arr = ( "Some id", "Some new id", $id, "ID" );
+@arr = sort ( "Some id", "Some new id", $id, "ID" );
 is $tmp, "@arr", "correct values set";
 
 $list_key = NAMESPACE.":D:".$saved_name.':Some id';
@@ -212,7 +213,7 @@ ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 $status_key  = NAMESPACE.':status:'.$coll->name;
 
-$list_key = NAMESPACE.':D:*';
+$list_key = NAMESPACE.':I:*';
 foreach my $i ( 1..( $coll->size * 2 ) )
 {
     $id = $coll->insert( $i, $i );
@@ -240,8 +241,8 @@ $status_key  = NAMESPACE.':status:'.$coll->name;
 $list_key = NAMESPACE.':D:*';
 foreach my $i ( 1..( $coll->size * 2 ) )
 {
-    $id = $coll->insert( $i, $i );
-    $id = $coll->insert( $i, $i );
+    $id = $coll->insert( $i, $i, undef, gettimeofday + 0 );
+    $id = $coll->insert( $i, $i, undef, gettimeofday + 0 );
     $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
     @arr = $coll->_call_redis( "KEYS", $list_key );
     ok $tmp <= $coll->size, "correct lists value: ".( $i * 2 )." inserts, $tmp length, size = ".$coll->size.", ".scalar( @arr )." lists";

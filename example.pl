@@ -143,8 +143,10 @@ exception( $coll, $@ ) if $@;
 
 my ( $length, $lists, $items );
 eval {
-    ( $length, $lists, $items ) = $coll->validate;
-    print "An existing collection uses $length byte of data, in $items items are placed in $lists lists\n";
+    my $info = $coll->collection_info;
+    print 'An existing collection uses ', $info->{length}, ' byte of data, ',
+        'in ', $info->{items}, ' items are placed in ',
+        $info->{lists}, ' lists', "\n";
 
     print "The collection has '$id' list\n" if $coll->exists( 'Some_id' );
 
@@ -158,7 +160,7 @@ eval {
     $coll->quit;
 
 # Before use, make sure that the collection is not being used by other customers
-#    $coll->drop;
+#    $coll->drop_collection;
 };
 exception( $coll, $@ ) if $@;
 

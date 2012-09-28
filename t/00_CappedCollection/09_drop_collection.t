@@ -43,7 +43,7 @@ use Redis::CappedCollection qw(
     EOLDERTHANALLOWED
     );
 
-# options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [] )
+# options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
 
 my $redis;
 my $real_redis;
@@ -67,55 +67,51 @@ $real_redis->quit;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $status_key, $queue_key, $size );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-sub new_connect {
-    # For Test::RedisServer
-    $redis = Test::RedisServer->new( conf =>
-        {
-            port                => empty_port(),
-            maxmemory           => 0,
-#            "vm-enabled"        => 'no',
-            "maxmemory-policy"  => 'noeviction',
-            "maxmemory-samples" => 100,
-        } );
-    isa_ok( $redis, 'Test::RedisServer' );
+$coll = Redis::CappedCollection->new(
+    $redis,
+    name    => "Some name",
+    size    => 1_000_000,
+    );
+isa_ok( $coll, 'Redis::CappedCollection' );
+ok $coll->_server =~ /.+:$port$/, $msg;
+ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $coll = Redis::CappedCollection->new(
-        $redis,
-        $size ? ( 'size' => $size ) : (),
-        );
-    isa_ok( $coll, 'Redis::CappedCollection' );
+$status_key  = NAMESPACE.':status:'.$coll->name;
+$queue_key   = NAMESPACE.':queue:'.$coll->name;
+ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
+ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
-    ok ref( $coll->_redis ) =~ /Redis/, $msg;
+is $coll->name, "Some name",    "correct collection name";
+is $coll->size, 1_000_000,      "correct size";
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
-    ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
-    ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
-}
+#-- all correct
 
-$size = undef;
-new_connect();
-
-is $coll->size, 0, $msg;
-
-$coll->drop_collection;
-
-$size = 12345;
-new_connect();
-is $coll->size, 12345, $msg;
-
-$coll->drop_collection;
-
-foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
+# some inserts
+$len = 0;
+$tmp = 0;
+for ( my $i = 1; $i <= 10; ++$i )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
-        redis   => DEFAULT_SERVER.":".empty_port(),
-        size    => $arg,
-        ) } "expecting to die: ".( $arg || '' );
+    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length";
+is $info->{lists},  10,     "OK lists";
+is $info->{items},  $len,   "OK items";
+
+$coll->drop_collection;
+
+$list_key = NAMESPACE.':L:*';
+@arr = $coll->_call_redis( "KEYS", $list_key );
+
+ok !$coll->_call_redis( "EXISTS", $status_key ),    "status hash droped";
+ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
+ok !@arr,                                           "data lists droped";
+
+is $coll->name, undef, "correct collection name";
+is $coll->size, undef, "correct size";
 
 }

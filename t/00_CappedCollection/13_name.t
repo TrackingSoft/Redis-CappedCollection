@@ -100,12 +100,12 @@ sub new_connect {
 $name = '';
 new_connect();
 is bytes::length( $coll->name ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
-$tmp = $coll->drop;
+$tmp = $coll->drop_collection;
 is $tmp, 1, "correct";
 
 new_connect();
 $coll->insert( '*');
-$tmp = $coll->drop;
+$tmp = $coll->drop_collection;
 is $tmp, 5, "correct";
 
 $name = $msg;
@@ -113,7 +113,7 @@ new_connect();
 
 is $coll->name, $msg, $msg;
 
-$coll->drop;
+$coll->drop_collection;
 
 foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {

@@ -61,7 +61,7 @@ SKIP: {
 # For Test::RedisServer
 $real_redis->quit;
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -102,10 +102,10 @@ for ( my $i = 1; $i <= 10; ++$i )
 {
     ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 my $prev_max_datasize = $coll->max_datasize;
 my $max_datasize = 100;
@@ -115,35 +115,35 @@ is $coll->max_datasize, $max_datasize, $msg;
 eval { $id = $coll->insert( '*' x ( $max_datasize + 1 ) ) };
 is $coll->last_errorcode, EDATATOOLARGE, "EDATATOOLARGE";
 note '$@: ', $@;
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
 is $coll->last_errorcode, EDATATOOLARGE, "EDATATOOLARGE";
 note '$@: ', $@;
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 $coll->max_datasize( $prev_max_datasize );
 is $coll->max_datasize, $prev_max_datasize, $msg;
 
 eval { $id = $coll->insert( '*' x ( $max_datasize + 1 ) ) };
 ok !$@, $msg;
-@arr = $coll->validate;
-is $arr[0], $tmp += $max_datasize + 1, "OK length - $arr[0]";
-is $arr[1], 11,     "OK lists - $arr[1]";
-is $arr[2], ++$len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp += $max_datasize + 1,  "OK length - $info->{length}";
+is $info->{lists},  11,                         "OK lists - $info->{lists}";
+is $info->{items},  ++$len,                     "OK queue length - $info->{items}";
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
 ok !$@, $msg;
-@arr = $coll->validate;
-is $arr[0], $tmp + $max_datasize, "OK length - $arr[0]";
-is $arr[1], 11,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp + $max_datasize,   "OK length - $info->{length}";
+is $info->{lists},  11,                     "OK lists - $info->{lists}";
+is $info->{items},  $len,                   "OK queue length - $info->{items}";
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 

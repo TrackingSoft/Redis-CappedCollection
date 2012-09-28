@@ -61,7 +61,7 @@ SKIP: {
 # For Test::RedisServer
 $real_redis->quit;
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $size, $older_allowed );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $size, $older_allowed, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -109,10 +109,10 @@ for ( my $i = 1; $i <= 10; ++$i )
 {
     ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length - $info->{length}";
+is $info->{lists},  10,     "OK lists - $info->{lists}";
+is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 #-- ENOERROR
 
@@ -141,7 +141,7 @@ $coll->max_datasize( $prev_max_datasize );
 
 $coll->quit;
 
-eval { @arr = $coll->validate };
+eval { $info = $coll->collection_info };
 is $coll->last_errorcode, ENETWORK, "ENETWORK";
 note '$@: ', $@;
 ok !$coll->_redis->ping, "server is not available";
@@ -171,7 +171,7 @@ SKIP:
         }
     }
 
-    $coll->drop;
+    $coll->drop_collection;
 }
 
 #-- EMAXMEMORYPOLICY
@@ -212,7 +212,7 @@ SKIP:
     ok $@, "exception";
     is $coll->last_errorcode, ECOLLDELETED, "ECOLLDELETED";
     note '$@: ', $@;
-    $coll->drop;
+    $coll->drop_collection;
 }
 
 #-- EREDIS

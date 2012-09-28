@@ -26,6 +26,7 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -67,7 +68,7 @@ $real_redis->quit;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -85,10 +86,11 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 #-- all correct
 
-@arr = $coll->validate;
-is $arr[0], 0, "OK length";
-is $arr[1], 0, "OK lists";
-is $arr[2], 0, "OK items";
+$info = $coll->collection_info;
+is $info->{length}, 0, "OK length";
+is $info->{lists},  0, "OK lists";
+is $info->{items},  0, "OK items";
+is $info->{oldest_time}, undef, "OK items";
 
 # some inserts
 $len = 0;
@@ -96,10 +98,11 @@ $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
     ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
-    @arr = $coll->validate;
-    is $arr[0], $tmp,   "OK length";
-    is $arr[1], $i,     "OK lists";
-    is $arr[2], $len,   "OK items";
+    $info = $coll->collection_info;
+    is $info->{length}, $tmp,   "OK length";
+    is $info->{lists},  $i,     "OK lists";
+    is $info->{items},  $len,   "OK items";
+    ok $info->{oldest_time} > 0, "OK items";
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
@@ -118,10 +121,10 @@ $list_key = NAMESPACE.':D:*';
 foreach my $i ( 1..( $coll->size * 2 ) )
 {
     $id = $coll->insert( '*', $i );
-    @arr = $coll->validate;
-    is $arr[0], ( $i <= $coll->size ) ? $i : $coll->size, "OK length";
-    is $arr[1], ( $i <= $coll->size ) ? $i : $coll->size, "OK lists";
-    is $arr[2], ( $i <= $coll->size ) ? $i : $coll->size, "OK items";
+    $info = $coll->collection_info;
+    is $info->{length}, ( $i <= $coll->size ) ? $i : $coll->size, "OK length";
+    is $info->{lists},  ( $i <= $coll->size ) ? $i : $coll->size, "OK lists";
+    is $info->{items},  ( $i <= $coll->size ) ? $i : $coll->size, "OK items";
 }
 
 $id = $coll->insert( '*' x $coll->size );
@@ -130,17 +133,17 @@ $tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
 is $tmp, $coll->size, "correct length value";
 is scalar( @arr ), 1, "correct lists value";
 
-@arr = $coll->validate;
-is $arr[0], $coll->size,    "OK length";
-is $arr[1], 1,              "OK lists";
-is $arr[2], 1,              "OK items";
+$info = $coll->collection_info;
+is $info->{length}, $coll->size,    "OK length";
+is $info->{lists},  1,              "OK lists";
+is $info->{items},  1,              "OK items";
 
 dies_ok { $id = $coll->insert( '*' x ( $coll->size + 1 ) ) } "expecting to die";
 
-@arr = $coll->validate;
-is $arr[0], $coll->size,    "OK length";
-is $arr[1], 1,              "OK lists";
-is $arr[2], 1,              "OK items";
+$info = $coll->collection_info;
+is $info->{length}, $coll->size,    "OK length";
+is $info->{lists},  1,              "OK lists";
+is $info->{items},  1,              "OK items";
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
@@ -158,117 +161,119 @@ $queue_key   = NAMESPACE.':queue:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
-$coll->insert( $_, "id" ) for 1..9;
+$coll->insert( $_, "id", undef, gettimeofday + 0 ) for 1..9;
 $list_key = NAMESPACE.':D:'.$coll->name.':id';
 is $coll->_call_redis( "HLEN", $list_key ), 9, "correct list length";
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value";
 
-@arr = $coll->validate;
-is $arr[0], 9, "OK length";
-is $arr[1], 1,  "OK lists";
-is $arr[2], 9,  "OK items";
+$info = $coll->collection_info;
+is $info->{length}, 9, "OK length";
+is $info->{lists},  1, "OK lists";
+is $info->{items},  9, "OK items";
 
 $tmp = 0;
 # 9 = 1  2  3  4  5  6  7  8  9
 foreach my $i ( 1..9 )
 {
+    my $tm = $coll->collection_info->{oldest_time};
     $tmp = $coll->update( "id", $i - 1, "$i*" );
     if ( $i == 1 )
     {
         # 10 = 1* 2  3  4  5  6  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
-        is $arr[1], 1,  "OK lists";
-        is $arr[2], 9,  "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 10, "OK length";
+        is $info->{lists},  1,  "OK lists";
+        is $info->{items},  9,  "OK items";
     }
     elsif ( $i == 2 )
     {
         # 9 = 2* 3  4  5  6  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 9, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 8, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 9, "OK length";
+        is $info->{lists},  1, "OK lists";
+        is $info->{items},  8, "OK items";
+        ok $info->{oldest_time} > $tm, "OK oldest time";
     }
     elsif ( $i == 3 )
     {
         # 10 = 2* 3* 4  5  6  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
-        is $arr[1], 1,  "OK lists";
-        is $arr[2], 8,  "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 10, "OK length";
+        is $info->{lists},  1,  "OK lists";
+        is $info->{items},  8,  "OK items";
     }
     elsif ( $i == 4 )
     {
         # 9 = 3* 4* 5  6  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 9, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 7, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 9, "OK length";
+        is $info->{lists},  1, "OK lists";
+        is $info->{items},  7, "OK items";
     }
     elsif ( $i == 5 )
     {
         # 10 = 3* 4* 5*  6  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 7, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 10, "OK length";
+        is $info->{lists},  1,  "OK lists";
+        is $info->{items},  7,  "OK items";
     }
     elsif ( $i == 6 )
     {
         # 9 = 4* 5* 6*  7  8  9
         ok $tmp, "OK update $i";
-        @arr = $coll->validate;
-        is $arr[0], 9, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 6, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 9, "OK length";
+        is $info->{lists},  1, "OK lists";
+        is $info->{items},  6, "OK items";
     }
     elsif ( $i == 7 )
     {
         # 10 = 4* 5* 6* 7*  8  9
         ok $tmp, "not updated $i";
-        @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 6, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 10, "OK length";
+        is $info->{lists},  1,  "OK lists";
+        is $info->{items},  6,  "OK items";
     }
     elsif ( $i == 8 )
     {
         # 9 = 5* 6* 7* 8*  9
         ok $tmp, "not updated $i";
-        @arr = $coll->validate;
-        is $arr[0], 9, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 5, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 9, "OK length";
+        is $info->{lists},  1, "OK lists";
+        is $info->{items},  5, "OK items";
     }
     elsif ( $i == 9 )
     {
         # 10 = 5* 6* 7* 8* 9*
         ok $tmp, "not updated $i";
-        @arr = $coll->validate;
-        is $arr[0], 10, "OK length";
-        is $arr[1], 1, "OK lists";
-        is $arr[2], 5, "OK items";
+        $info = $coll->collection_info;
+        is $info->{length}, 10, "OK length";
+        is $info->{lists},  1,  "OK lists";
+        is $info->{items},  5,  "OK items";
         last;
     }
 }
 
 $tmp = $coll->update( "bad_id", 0, '*' );
 ok !$tmp, "not updated";
-@arr = $coll->validate;
-is $arr[0], 10, "OK length";
-is $arr[1], 1, "OK lists";
-is $arr[2], 5, "OK items";
+$info = $coll->collection_info;
+is $info->{length}, 10, "OK length";
+is $info->{lists},  1,  "OK lists";
+is $info->{items},  5,  "OK items";
 
 $tmp = $coll->update( "id", 0, '***' );
 ok !$tmp, "not updated";
-@arr = $coll->validate;
-is $arr[0], 10, "OK length";
-is $arr[1], 1, "OK lists";
-is $arr[2], 5, "OK items";
+$info = $coll->collection_info;
+is $info->{length}, 10, "OK length";
+is $info->{lists},  1,  "OK lists";
+is $info->{items},  5,  "OK items";
 
 }

@@ -26,6 +26,7 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -67,7 +68,7 @@ $real_redis->quit;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
@@ -92,12 +93,12 @@ $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    ( $coll->insert( $_, $i, undef, gettimeofday + 0 ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK items - $arr[2]";
+$info = $coll->collection_info;
+is $info->{length}, $tmp,   "OK length";
+is $info->{lists},  10,     "OK lists";
+is $info->{items},  $len,   "OK items";
 
 for ( my $i = 1; $i <= 10; ++$i )
 {
@@ -107,16 +108,16 @@ for ( my $i = 1; $i <= 10; ++$i )
         is $arr[0], $i,    "correct id";
         is $arr[1], $j.'', "correct data";
         my $data = $arr[1];
-        eval { @arr = $coll->validate; };
+        eval { $info = $coll->collection_info; };
         if ( $@ )
         {
             ok( ( $coll->last_errorcode == ECOLLDELETED and $i == 10 and $j == 10 ), "expecting to die" );
         }
         else
         {
-            is $arr[0], ( $tmp -= bytes::length( $data ) ), "OK length";
-            is $arr[1], 10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
-            is $arr[2], --$len,                             "OK items";
+            is $info->{length}, ( $tmp -= bytes::length( $data ) ), "OK length";
+            is $info->{lists},  10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
+            is $info->{items},  --$len,                             "OK items";
         }
     }
 }

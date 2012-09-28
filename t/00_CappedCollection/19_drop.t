@@ -67,51 +67,58 @@ $real_redis->quit;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$coll = Redis::CappedCollection->new(
-    $redis,
-    name    => "Some name",
-    size    => 1_000_000,
-    );
-isa_ok( $coll, 'Redis::CappedCollection' );
-ok $coll->_server =~ /.+:$port$/, $msg;
-ok ref( $coll->_redis ) =~ /Redis/, $msg;
+for my $big_data_threshold ( ( 0, 20 ) )
+{
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
-ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
-ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
+    $coll = Redis::CappedCollection->new(
+        $redis,
+        name    => "Some name",
+        big_data_threshold => $big_data_threshold,
+        );
+    isa_ok( $coll, 'Redis::CappedCollection' );
+    ok $coll->_server =~ /.+:$port$/, $msg;
+    ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-is $coll->name, "Some name",    "correct collection name";
-is $coll->size, 1_000_000,      "correct size";
+    is $coll->name, "Some name", "correct collection name";
 
 #-- all correct
 
 # some inserts
-$len = 0;
-$tmp = 0;
-for ( my $i = 1; $i <= 10; ++$i )
-{
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $len = 0;
+    $tmp = 0;
+    for ( my $i = 1; $i <= 10; ++$i )
+    {
+        ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for 1..10;
+    }
+    $info = $coll->collection_info;
+    is $info->{length}, $tmp,   "OK length";
+    is $info->{lists},  10,     "OK lists";
+    is $info->{items},  $len,   "OK items";
+
+    for ( my $i = 1; $i <= 10; ++$i )
+    {
+        $coll->drop( $i );
+        $info = $coll->collection_info;
+        is $info->{length}, $tmp -= 11,  "OK length";
+        is $info->{lists},  10 - $i,    "OK lists";
+        is $info->{items},  $len -= 10,  "OK items";
+    }
+
+    dies_ok { $coll->drop() } "expecting to die - no args";
+
+    foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
+    {
+        dies_ok { $coll->drop(
+            $arg,
+            ) } "expecting to die: ".( $arg || '' );
+    }
+
+    $coll->drop_collection;
+
 }
-@arr = $coll->validate;
-is $arr[0], $tmp,   "OK length - $arr[0]";
-is $arr[1], 10,     "OK lists - $arr[1]";
-is $arr[2], $len,   "OK queue length - $arr[2]";
-
-$coll->drop;
-
-$list_key = NAMESPACE.':L:*';
-@arr = $coll->_call_redis( "KEYS", $list_key );
-
-ok !$coll->_call_redis( "EXISTS", $status_key ),    "status hash droped";
-ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
-ok !@arr,                                           "data lists droped";
-
-is $coll->name, undef, "correct collection name";
-is $coll->size, undef, "correct size";
 
 }
