@@ -882,7 +882,7 @@ __END__
 
 =head1 NAME
 
-Redis::CappedCollection - The fixed sized collections that have
+Redis::CappedCollection - Provides fixed sized collections that have
 a auto-FIFO age-out feature.
 
 =head1 VERSION
@@ -944,8 +944,8 @@ Support the work with data structures on the Redis server.
 =item *
 
 Supports the automatic creation of capped collection, status monitoring,
-updating the data set, obtaining a consistent data from the collection,
-automatic data remove, the classification of possible errors.
+updating the data set, obtaining consistent data from the collection,
+automatic data removal, the classification of possible errors.
 
 =item *
 
@@ -954,7 +954,7 @@ Simple methods for organizing producer and consumer clients.
 =back
 
 Capped collections are fixed sized collections that have a auto-FIFO
-age-out feature (age out is based on the time the corresponding inserted data).
+age-out feature (age out is based on the time of the corresponding inserted data).
 With the built-in FIFO mechanism, you are not at risk of using
 excessive disk space.
 Capped collections keep data in their time the corresponding inserted data order
@@ -963,8 +963,8 @@ Capped collections automatically maintain insertion order for the data lists
 in the collection.
 
 You may insert new data in the capped collection.
-If there is a list with the ID, the data is inserted into the existed list,
-or to a new list.
+If there is a list with the ID, the data is inserted into the existing list,
+otherwise it is inserted into a new list.
 
 You may update the existing data in the collection.
 
@@ -1000,11 +1000,11 @@ This example illustrates a C<new()> call with all the valid arguments:
 
     my $coll = Redis::CappedCollection->new(
         redis   => "$server:$port", # Default Redis local server and port
-        name    => 'Some name', # If 'name' not specified, it creates
+        name    => 'Some name', # If 'name' is not specified, it creates
                         # a new collection named as UUID.
                         # If specified, the work is done with
-                        # a given collection or create a collection
-                        # with the specified name.
+                        # a given collection or a collection collection is
+                        # created with the specified name.
         size            => 100_000, # The maximum size, in bytes,
                         # of the capped collection data
                         # (Default 0 - no limit).
@@ -1022,11 +1022,11 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # (Default 0 - insert too old data is prohibited).
         );
 
-Requirements for arguments C<name>, C<size>, described in more detail
+Requirements for arguments C<name>, C<size>, are described in more detail
 in the sections relating to the methods L</name>, L</size> .
 
-If the value of C<name> specified, the work is done with a given collection
-or create a collection with the specified name.
+If the value of C<name> is specified, the work is done with a given collection
+or creates a new collection with the specified name.
 Do not use the symbol C<':'> in C<name>.
 
 The following examples illustrate other uses of the C<new> method:
@@ -1085,7 +1085,7 @@ you add the data.
     $list_id = $coll->insert( 'Some data stuff' );
 
 In a list context, the method returns the ID of the data list to which
-you add the data and the data ID corresponding to your data.
+your adding the data and the data ID corresponding to your data.
 
     ( $list_id, $data_id ) = $coll->insert( 'Some data stuff', 'Some_id' );
     # or
@@ -1094,12 +1094,12 @@ you add the data and the data ID corresponding to your data.
 =head3 C<update( $list_id, $data_id, $data )>
 
 Updates the data in the queue identified by the first argument.
-ID must be a non-empty string.
+C<$list_id> must be a non-empty string.
 
 The updated data ID given as the second argument.
 The C<$data_id> must be a non-empty string.
 
-New data obtained in the third argument.
+New data should be included in the third argument.
 Data should be a string whose length should not exceed the value available
 through the method L</max_datasize>.
 
@@ -1127,7 +1127,7 @@ If the C<$data_id> argument is not specified or is an empty string:
 
 In a list context, the method returns all the data from the list given by
 the C<$list_id> identifier.
-If the C<$data_id> argument is an empty string than returns all data IDs and
+If the C<$data_id> argument is an empty string than it returns all data IDs and
 data values of the data list.
 Method returns an empty list if the list with the given ID does not exist.
 
@@ -1150,7 +1150,7 @@ If the data with C<$data_id> ID does not exists, C<undef> is returned.
 =back
 
 C<$list_id> must be a non-empty string.
-C<$data_id> must to see as a normal string.
+C<$data_id> must be a normal string.
 
 The following examples illustrate uses of the C<receive> method:
 
@@ -1168,9 +1168,9 @@ The following examples illustrate uses of the C<receive> method:
 The method is designed to retrieve the oldest data stored in the collection.
 
 Returns a list of two elements.
-The first element contains the identifier of the list from which to retrieve data.
+The first element contains the identifier of the list from which the data was retrieved.
 The second element contains the extracted data.
-When retrieving data, they are removed from the collection.
+When retrieving data, it is removed from the collection.
 
 If you perform a C</pop_oldest> on the collection, the data will always
 be returned in order of the time corresponding inserted data.
@@ -1215,7 +1215,7 @@ The following examples illustrate uses of the C<validate> method:
 
 =head3 C<exists( $list_id )>
 
-The method is designed to test whether there is a list of the collection with
+The method is designed to test whether there is a list in the collection with
 ID C<$list_id>.
 Returns true if the list exists and false otherwise.
 
@@ -1225,7 +1225,7 @@ The following examples illustrate uses of the C<exists> method:
 
 =head3 C<lists( $pattern )>
 
-Returns a list of identifiers list data stored in a collection.
+Returns a list of identifiers stored in a collection.
 Returns all list IDs matching C<$pattern> if C<$pattern> is not empty.
 C<$patten> must be a non-empty string.
 
@@ -1261,10 +1261,10 @@ Don't use C<lists> in your regular application code.
 
 =head3 C<drop>
 
-Use the C</drop> method to the removal of the entire collection.
+Use the C</drop> method to remove the entire collection.
 Method removes all the structures on the Redis server associated with
 the collection.
-After the C</drop> you must explicitly recreate the collection.
+After using C</drop> you must explicitly recreate the collection.
 
 Before use, make sure that the collection is not being used by other customers.
 
@@ -1342,7 +1342,7 @@ C<maxmemory> limit from a C<redis.conf> file.
 =head3 C<older_allowed>
 
 The method of access to the C<older_allowed> attribute -
-permission to add data with time is less than the data time of which was
+permission to add data with time less than the data time which was
 deleted from the data list. Default 0 - insert too old data is prohibited.
 
 The method returns the current value of the attribute.
@@ -1385,7 +1385,7 @@ Namespace name used keys on the Redis server - C<'Capped'>.
 The method for the possible error to analyse: L</last_errorcode>.
 
 A L<Redis|Redis> error will cause the program to halt (C<confess>).
-In addition to errors in the L<Redis|Redis> module detected errors
+In addition to errors in the L<Redis|Redis> module, detected errors are
 L</EMISMATCHARG>, L</EDATATOOLARGE>, L</EMAXMEMORYPOLICY>, L</ECOLLDELETED>,
 L</EDATAIDEXISTS>, L</EOLDERTHANALLOWED>.
 
@@ -1434,7 +1434,7 @@ This means that an error in connection to Redis server was detected.
 
 =item C<EMAXMEMORYLIMIT>
 
-This means that the command not allowed when used memory > C<maxmemory>
+This means that the command is not allowed when used memory > C<maxmemory>
 in the C<redis.conf> file.
 
 =item C<EMAXMEMORYPOLICY>
@@ -1457,7 +1457,7 @@ the data list.
 =item C<EOLDERTHANALLOWED>
 
 This means that you are trying to insert the data with the time less than
-the time of the data have been deleted from the data list.
+the time of the data that has been deleted from the data list.
 
 =back
 
@@ -1709,7 +1709,7 @@ For example:
 =head1 DEPENDENCIES
 
 In order to install and use this package you will need Perl version
-5.010 or better. The Redis::CappedCollection module depend on other
+5.010 or better. The Redis::CappedCollection module depends on other
 packages that are distributed separately from Perl. We recommend that
 you have the following packages installed before you install
 Redis::CappedCollection :
@@ -1743,7 +1743,7 @@ Need a Redis server version 2.6 or higher as module uses Redis Lua scripting.
 
 The use of C<maxmemory-police all*> in the C<redis.conf> file could lead to
 a serious (but hard to detect) problem as Redis server may delete
-the collection element. Therefore the C<Redis::CappedCollection> not work with
+the collection element. Therefore the C<Redis::CappedCollection> does not work with
 mode C<maxmemory-police all*> in the C<redis.conf>.
 
 Full name of some Redis keys may not be known at the time of the call

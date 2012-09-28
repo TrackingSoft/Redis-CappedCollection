@@ -1,7 +1,7 @@
 Redis::CappedCollection package version 0.01
 ============================================
 
-Redis::CappedCollection module provides the fixed sized collections that have
+Redis::CappedCollection module provides fixed sized collections that have
 a auto-FIFO age-out feature.
 
 The Redis::CappedCollection package was written, tested, and found working on 
@@ -19,7 +19,7 @@ To install this package type the following:
 DEPENDENCIES
 
 In order to install and use this package you will need Perl version
-5.010 or better. The Redis::CappedCollection module depend on other
+5.010 or better. The Redis::CappedCollection module depends on other
 packages that are distributed separately from Perl. We recommend that
 you have the following packages installed before you install
 Redis::CappedCollection :
@@ -49,7 +49,7 @@ You need to have a running Redis instance before launching the test.
 DOCUMENTATION
 
 The Redis::CappedCollection module has a man page.
-A simple description of module is included below in the SEE ALSO section.
+A simple description of the module is included below in the SEE ALSO section.
 
 SEE ALSO
 
