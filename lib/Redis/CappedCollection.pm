@@ -92,7 +92,7 @@ my $_lua_list_type = <<"END_LIST_TYPE";
 
     -- converting to the comparisons that follow
     big_data_threshold = tonumber( redis.call( 'HGET', status_key, 'big_data_threshold' ), 10 )
-    -- amount of data in the list need to know to sequential analysis at 'hash' mode
+    -- amount of data in the list, need to know to sequential analysis at 'hash' mode
     list_items   = 0
 
     if redis.call( 'EXISTS', data_key ) == 1 then
@@ -106,10 +106,10 @@ my $_lua_list_type = <<"END_LIST_TYPE";
 -- exactly 'hash'
             list_type  = 'hash'
             if list_exist ~= 0 then
-                -- information structure of of the list there
+                -- information structure of the list
                 list_items = redis.call( 'HGET', info_key, '0' )
                 if list_items == nil then
-                    -- information on the list there are no
+                    -- information on the list there are no items
                     list_exist = 0
                     list_items = 0
                 else
@@ -214,7 +214,7 @@ my $_lua_cleaning = <<"END_CLEANING";
                     excess_data      = vals[2]
                     excess_data_len  = #excess_data
 
-                    -- actually remove the oldest this
+                    -- actually remove the oldest
                     redis.call( 'HDEL', excess_info_key, excess_i..'.i', excess_i..'.d', excess_i..'.t' )
                     if excess_list_id == list_id then
                         -- had been removed from the list of where we plan to make changes
@@ -224,11 +224,11 @@ my $_lua_cleaning = <<"END_CLEANING";
                     if excess_list_items > 1 then
                         -- If the list has more data
 
-                        -- reordering data is not required when removing an element with the last one
+                        -- reordering data is not required when removing the last element from the list
                         if excess_i ~= excess_list_items then
                             -- if the element was removed from the list is not the last one
 
-                            -- obtain information about the list item with the last one
+                            -- obtain information about the last list item
                             local vals = redis.call( 'HMGET', excess_info_key, excess_list_items..'.i', excess_list_items..'.d', excess_list_items..'.t' )
                             -- transfer the data of the last element in the position of the deleted item (to ensure continuity of item numbers)
                             redis.call( 'HMSET', excess_info_key, excess_i..'.i', vals[1], excess_i..'.d', vals[2], excess_i..'.t', vals[3] )
@@ -254,7 +254,7 @@ my $_lua_cleaning = <<"END_CLEANING";
                             end
                         end
 
-                        -- obtain and store information about the oldest this list
+                        -- obtain and store information about the oldest list item
                         local oldest_data_id = redis.call( 'HGET', excess_info_key, oldest_i..'.i' )
                         redis.call( 'HMSET',    excess_info_key, 't', oldest_time, 'i', oldest_data_id, 'l', excess_data_time )
                         redis.call( 'ZADD',     queue_key, oldest_time, excess_list_id )
@@ -393,7 +393,7 @@ if status_exist == 1 then
     -- upcoming increase in the size of data of the collection
     local size_delta    = data_len
 
--- deleting obsolete data, if it can be necessary
+-- deleting obsolete data, if it is necessary
     if size > 0 then
         $_lua_cleaning
     end
@@ -425,7 +425,7 @@ if status_exist == 1 then
 
     if error == 0 then
 
--- Validating time new data, if required
+-- Validating the time of new data, if required
         if redis.call( 'HGET', status_key, 'older_allowed' ) ~= '1' then
             if list_exist ~= 0 then
                 local last_removed_time = tonumber( redis.call( 'HGET', info_key, 'l' ), 10 )
@@ -596,7 +596,7 @@ if status_exist == 1 then
         end
     end
 
--- Change the data, if they exist
+-- Change the data, if it exists
     if data_exist == 1 then
 
 -- ready to change data
@@ -848,12 +848,12 @@ if queue_exist == 1 and status_exist == 1 then
             -- delete the information about the time of the data
             redis.call( 'ZREM', time_key, data_id )
 
-            -- obtain information about the data that have become the oldest
+            -- obtain information about the data that has become the oldest
             local vals = redis.call( 'ZRANGE', time_key, 0, 0, 'WITHSCORES' )
             local oldest_data_id    = vals[1]
             local oldest_time       = vals[2]
 
-            -- stores information about the data that have become the oldest
+            -- stores information about the data that has become the oldest
             redis.call( 'HMSET',    info_key, 't', oldest_time, 'i', oldest_data_id, 'l', data_time )
             redis.call( 'ZADD',     queue_key, oldest_time, list_id )
 
@@ -903,11 +903,11 @@ if queue_exist == 1 and status_exist == 1 then
         if list_items > 1 then
             -- If the list has more data
 
-            -- reordering data is not required when removing an element with the last one
+            -- reordering data is not required when removing the last data element
             if data_i ~= list_items then
                 -- if the element was removed from the list is not the last one
 
-                -- obtain information about the list item with the last one
+                -- obtain information about the last list item
                 local vals = redis.call( 'HMGET', info_key, list_items..'.i', list_items..'.d', list_items..'.t' )
                 -- transfer the data of the last element in the position of the deleted item (to ensure continuity of item numbers)
                 redis.call( 'HMSET', info_key, data_i..'.i', vals[1], data_i..'.d', vals[2], data_i..'.t', vals[3] )
@@ -920,7 +920,7 @@ if queue_exist == 1 and status_exist == 1 then
             list_items = list_items - 1
             redis.call( 'HSET', info_key, 0, list_items )
 
-            -- looking for this is the oldest in the remaining list
+            -- looking for the oldest data item in the remaining list
             local oldest_i = 1
             local oldest_time = redis.call( 'HGET', info_key, '1.t' )
             for i = 2, list_items do
@@ -931,7 +931,7 @@ if queue_exist == 1 and status_exist == 1 then
                 end
             end
 
-            -- obtain and store information about the oldest this list
+            -- obtain and store information about the oldest data item in the list
             local oldest_data_id = redis.call( 'HGET', info_key, oldest_i..'.i' )
             redis.call( 'HMSET',    info_key, 't', oldest_time, 'i', oldest_data_id, 'l', data_time )
             redis.call( 'ZADD',     queue_key, oldest_time, list_id )
@@ -1867,7 +1867,7 @@ section.
 
 =head1 ABSTRACT
 
-Redis::CappedCollection module provides the fixed sized collections that have
+Redis::CappedCollection module provides fixed sized collections that have
 a auto-FIFO age-out feature.
 
 =head1 DESCRIPTION
@@ -1899,17 +1899,17 @@ Simple methods for organizing producer and consumer clients.
 
 =back
 
-Capped collections are fixed sized collections that have a auto-FIFO
+Capped collections are fixed sized collections that have an auto-FIFO
 age-out feature (age out is based on the time of the corresponding inserted data).
 With the built-in FIFO mechanism, you are not at risk of using
 excessive disk space.
-Capped collections keep data in their time the corresponding inserted data order
+Capped collections keep data in their time corresponding inserted data order
 automatically (in the respective lists of data).
 Capped collections automatically maintain insertion order for the data lists
 in the collection.
 
 You may insert new data in the capped collection.
-If there is a list with the ID, the data is inserted into the existing list,
+If there is a list with the specified ID, the data is inserted into the existing list,
 otherwise it is inserted into a new list.
 
 You may update the existing data in the collection.
@@ -1962,8 +1962,8 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # of the collection data after adding new data
                         # may exceed 'size'
                         # Default 0 - additional data should not be released.
-        advance_cleanup_num => 1_000, # Maximum number of times
-                        # the deleted data, if the size
+        advance_cleanup_num => 1_000, # Maximum number of data
+                        # elements to delete, if the size
                         # of the collection data after adding new data
                         # may exceed 'size'
                         # Default 0 - the number of times the deleted data
@@ -1975,7 +1975,7 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # Default 0 - insert too old data is prohibited.
                         # Is set for the new collection.
         big_data_threshold => 0, # The maximum number of items of data to store
-                        # as a common hashes.
+                        # in an optimized format to reduce memory usage.
                         # Default 0 - storage are separate hashes and
                         # ordered lists.
                         # Is set for the new collection.
@@ -2026,7 +2026,7 @@ Do not use the symbol C<':'> in C<$list_id>.
 If the second argument is not specified, the data is added to a new list
 with automatically generated ID (UUID).
 
-For a given data may be given the unique ID and the unique time.
+The data may be given a unique ID and a unique time.
 If the ID is not specified (or an empty string), it will be automatically
 generated in the form of sequential integer.
 Data ID must be unique for a list of data.
@@ -2092,7 +2092,7 @@ If the C<$data_id> argument is not specified or is an empty string:
 
 In a list context, the method returns all the data from the list given by
 the C<$list_id> identifier.
-If the C<$data_id> argument is an empty string than it returns all data IDs and
+If the C<$data_id> argument is an empty string then it returns all data IDs and
 data values of the data list.
 These returns are not ordered.
 
@@ -2174,7 +2174,7 @@ C<items> - Number of data items stored in the collection.
 
 =item *
 
-C<oldest_time> - Time corresponding to the oldest in the collection.
+C<oldest_time> - Time corresponding to the oldest data in the collection.
 C<undef> if the collection does not contain data.
 
 =back
@@ -2203,7 +2203,7 @@ C<items> - Number of data items stored in the data list.
 
 =item *
 
-C<oldest_time> - Time corresponding to the oldest in the data list.
+C<oldest_time> - Time corresponding to the oldest data in the list.
 C<undef> if the data list does not exists.
 
 =item *
@@ -2343,8 +2343,8 @@ an error will cause the program to halt (C<confess>).
 
 =head3 C<advance_cleanup_num>
 
-The method of access to the C<advance_cleanup_bytes> attribute - maximum number
-of times the deleted data, if the size of the collection data after adding
+The method of access to the C<advance_cleanup_num> attribute - maximum number
+of data elements to delete, if the size of the collection data after adding
 new data may exceed C<size>. Default 0 - the number of times the deleted data
 is not limited.
 
@@ -2381,16 +2381,17 @@ The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 =head3 C<big_data_threshold>
 
-The method of access to the C<big_data_threshold> attribute - the maximum number
-of items of data to store as a common hashes.
+The method of access to the C<big_data_threshold> attribute - determines the maximum
+data size to store in an optimzed format.  Data stored in this way will use less memory
+but require additional processing to access.
 Default 0 - storage are separate hashes and ordered lists.
 
 Can be used to save memory.
-It makes sense to use a small lists of data.
+It makes sense to use on small lists of data.
 Leads to a decrease in performance when using large lists of data.
 
 The method returns the current value of the attribute.
-The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+The C<big_data_threshold> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 To see a description of the used C<Redis::CappedCollection> data structure
 (on Redis server) look at the L</CappedCollection data structure> section.
@@ -2398,7 +2399,7 @@ To see a description of the used C<Redis::CappedCollection> data structure
 The effective value of C<big_data_threshold> depends on the conditions the collection:
 the item size and length of lists, the size of data identifiers, etc.
 
-The effective value of C<big_data_threshold> can be controlled server settings
+The effective value of C<big_data_threshold> can be controlled with server settings
 (C<hahs-max-ziplist-entries>, C<hash-max-ziplist-value>,
 C<zset-max-ziplist-entries>, C<zset-max-ziplist-value>)
 in the C<redis.conf> file.
