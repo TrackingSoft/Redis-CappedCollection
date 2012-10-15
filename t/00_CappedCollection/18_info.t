@@ -102,14 +102,14 @@ for my $big_data_threshold ( ( 0, 10 ) )
     $coll->insert( 1, 'Some list id', '', $tm );
     $info = $coll->info( 'Some list id' );
     is $info->{items}, 1, "OK items";
-    ok $tm - $info->{oldest_time} <= 0.00009, "OK oldest_time";
+    ok abs( $tm - $info->{oldest_time} <= 0.00009 ), "OK oldest_time";
     is $info->{last_removed_time},  0,      "OK last_removed_time";
     for ( my $i = 2; $i <= 10; ++$i )
     {
         $coll->insert( $i, 'Some list id', undef, gettimeofday + 0 );
         $info = $coll->info( 'Some list id' );
         is $info->{items}, $i, "OK items";
-        ok $tm - $info->{oldest_time} <= 0.00009, "OK oldest_time";
+        ok abs( $tm - $info->{oldest_time} <= 0.00009 ), "OK oldest_time";
         is $info->{last_removed_time}, 0, "OK last_removed_time";
     }
 
@@ -137,8 +137,8 @@ for my $big_data_threshold ( ( 0, 10 ) )
 
     $info = $coll->info( 'Some list id' );
     is $info->{items}, $coll->size, "OK items";
-    ok $arr[1] - $info->{oldest_time} <= 0.00009, "OK oldest_time";
-    ok $arr[0] - $info->{last_removed_time} <= 0.00009, "OK oldest_time";
+    ok abs( $arr[1] - $info->{oldest_time} ) <= 0.00009, "OK oldest_time";
+    ok abs( $arr[0] - $info->{last_removed_time} ) <= 0.00009, "OK oldest_time";
 
     dies_ok { $coll->info() } "expecting to die - no args";
 
@@ -148,6 +148,56 @@ for my $big_data_threshold ( ( 0, 10 ) )
             $arg,
             ) } "expecting to die: ".( $arg || '' );
     }
+
+    $coll->drop_collection;
+
+#----------
+    $coll = Redis::CappedCollection->new(
+        $redis,
+        big_data_threshold => $big_data_threshold,
+        );
+    isa_ok( $coll, 'Redis::CappedCollection' );
+    ok $coll->_server =~ /.+:$port$/, $msg;
+    ok ref( $coll->_redis ) =~ /Redis/, $msg;
+
+# some inserts
+    $len = 0;
+    $tmp = 0;
+    $tm = time;
+    for ( my $i = 1; $i <= 10; ++$i )
+    {
+        $coll->insert( $i, 'Some list id', undef, $tm );
+        $info = $coll->info( 'Some list id' );
+        is $info->{items}, $i, "OK items";
+        is $info->{oldest_time}, $tm, "OK oldest_time";
+        is $info->{last_removed_time}, 0, "OK last_removed_time";
+    }
+
+    $coll->drop_collection;
+
+# Remove old data (insert)
+    $coll = Redis::CappedCollection->new(
+        $redis,
+        size    => 5,
+        big_data_threshold => $big_data_threshold,
+        );
+    isa_ok( $coll, 'Redis::CappedCollection' );
+    ok $coll->_server =~ /.+:$port$/, $msg;
+    ok ref( $coll->_redis ) =~ /Redis/, $msg;
+
+    @arr = ();
+    $tm = time;
+    foreach my $i ( 1..$coll->size )
+    {
+        push @arr, $tm;
+        $id = $coll->insert( '*', 'Some list id', undef, $tm );
+    }
+    $id = $coll->insert( '*', 'Some list id', undef, $tm );
+
+    $info = $coll->info( 'Some list id' );
+    is $info->{items}, $coll->size, "OK items";
+    is $info->{oldest_time}, $tm, "OK oldest_time";
+    is $info->{last_removed_time}, $tm, "OK oldest_time";
 
     $coll->drop_collection;
 

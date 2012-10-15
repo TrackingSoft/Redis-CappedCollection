@@ -981,7 +981,6 @@ if status_exist == 1 then
     local vals      = redis.call( 'HMGET', status_key, 'length', 'lists', 'items' )
     local oldest    = redis.call( 'ZRANGE', queue_key, 0, 0, 'WITHSCORES' )
     local oldest_time = oldest[2]
-    oldest_time = oldest_time
     return { status_exist, vals[1], vals[2], vals[3], oldest_time }
 end
 
@@ -1030,7 +1029,6 @@ if status_exist == 1 and list_exist == 1 then
         items = redis.call( 'HGET', info_key, '0' )
     end
 
-    -- If you want to return a float from Lua you should return it as a string, exactly like Redis itself does
     oldest_time       = redis.call( 'HGET', info_key, 't' )
     last_removed_time = redis.call( 'HGET', info_key, 'l' )
 
@@ -1362,7 +1360,6 @@ has '_redis'                => (
     is          => 'rw',
 # 'Maybe[Test::RedisServer]' to test only
     isa         => 'Maybe[Redis] | Maybe[Test::RedisServer]',
-    init_arg    => undef,
     );
 
 has '_maxmemory'            => (
@@ -1941,6 +1938,12 @@ If invoked with the first argument being an object of C<Redis::CappedCollection>
 class or L<Redis|Redis> class, then the new object connection attribute values
 are taken from the object of the first argument. It does not create
 a new connection to the Redis server.
+
+Since L<Redis|Redis> knows nothing about encoding, it is forcing utf-8 flag
+on all data.
+If you want to store binary data in the C<Redis::CappedCollection> collection,
+you can disable this automatic encoding by passing an option to
+L<Redis|Redis> C<new>: C<encoding =E<gt> undef>.
 
 C<new> optionally takes arguments. These arguments are in key-value pairs.
 

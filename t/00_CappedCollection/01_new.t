@@ -114,12 +114,29 @@ $coll->_call_redis( 'DEL',
 $coll->quit;
 
 # each argument separately
+
+my $redis2 = Redis->new(
+    server => DEFAULT_SERVER.":".DEFAULT_PORT,
+    encoding => undef,
+    );
+
+$coll = Redis::CappedCollection->new(
+    $redis2,
+    );
+isa_ok( $coll, 'Redis::CappedCollection' );
+is $coll->_server, DEFAULT_SERVER.":".DEFAULT_PORT, $msg;
+ok ref( $coll->_redis ) =~ /Redis/, $msg;
+
+is $coll->_redis->{encoding}, undef, 'encoding not exists';
+
 $coll = Redis::CappedCollection->new(
     redis => DEFAULT_SERVER.":$port",
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, DEFAULT_SERVER.":$port", $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
+
+is $coll->_redis->{encoding}, 'utf8', 'encoding exists';
 
 $coll = Redis::CappedCollection->new(
     $coll,
