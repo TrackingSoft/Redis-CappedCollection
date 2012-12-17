@@ -1,4 +1,8 @@
 Revision history for Redis::CappedCollection module
 
-0.01  Tue Oct  16 2012
+0.02  Tue Dec  18 2012
+    CHANGES:
+    - Checking Perl version in Makefile.PL
+
+0.01  Tue Oct  17 2012
     - Original version

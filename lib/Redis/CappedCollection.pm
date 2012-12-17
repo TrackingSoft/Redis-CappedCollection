@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1830,7 +1830,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.01
+This documentation refers to C<Redis::CappedCollection> version 0.02
 
 =head1 SYNOPSIS
 
@@ -2719,8 +2719,8 @@ While working on the Redis server creates and uses these data structures:
     ...
     redis 127.0.0.1:6379> ZRANGE Capped:queue:89116152-C5BD-11E1-931B-0A690A986783 0 -1 WITHSCORES
     1) "478B9C84-C5B8-11E1-A2C5-D35E0A986783"
-    2) "1348252575.6651001"|    |
-    #           |          |    |
+    2) "1348252575.6651001"     |
+    #           |               |
     #  Score: oldest data_time  |
     #                   Member: Data List id (UUID)
     ...

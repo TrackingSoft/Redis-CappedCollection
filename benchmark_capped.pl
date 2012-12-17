@@ -95,7 +95,7 @@ my $ret = GetOptions(
 if ( !$ret or $help or ( $find_optimal and !$run_time ) )
 {
     print <<'HELP';
-Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--advance_cleanup_bytes=...] [--advance_cleanup_num=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--big_data_threshold=...] [--find_optimal] [--receive] [--dump=...] [--help]
+Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--advance_cleanup_bytes=...] [--advance_cleanup_num=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--big_data_threshold=...] [--find_optimal] [--dump=...] [--receive] [--help]
 
 Start a Redis client, connect to the Redis server, randomly inserts or receives data
 

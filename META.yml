@@ -18,6 +18,7 @@ name: Redis-CappedCollection
 no_index:
   directory:
     - t
+    - xt
     - inc
 requires:
   Data::UUID: 1.217
@@ -25,4 +26,4 @@ requires:
   Mouse: 0.97
   Params::Util: 1.07
   Redis: 1.952
-version: 0.01
+version: 0.02

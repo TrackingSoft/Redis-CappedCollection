@@ -1,4 +1,4 @@
-Redis::CappedCollection package version 0.01
+Redis::CappedCollection package version 0.02
 ============================================
 
 Redis::CappedCollection module provides fixed sized collections that have
@@ -45,6 +45,10 @@ for all dependencies and compiling them manually).
 TESTING
 
 You need to have a running Redis instance before launching the test.
+
+SIMPLE BENCHMARK
+
+Use benchmark_capped.pl to run a simple benchmark.
 
 DOCUMENTATION
 
