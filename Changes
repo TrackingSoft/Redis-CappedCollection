@@ -1,8 +1,12 @@
 Revision history for Redis::CappedCollection module
 
+0.03  Wed Feb  13 2013
+    CHANGES:
+    - 'new' indirectly detects no connection to the Redis server
+
 0.02  Tue Dec  18 2012
     CHANGES:
     - Checking Perl version in Makefile.PL
 
-0.01  Tue Oct  17 2012
+0.01  Wed Oct  17 2012
     - Original version

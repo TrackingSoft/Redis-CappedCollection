@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1251,6 +1251,9 @@ sub BUILD {
     $self->_redis( $self->_redis_constructor )
         unless ( $self->_redis );
 
+    my ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
+    defined( _NONNEGINT( $maxmemory ) ) or $self->_throw( ENETWORK );
+
     my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
     if ( $major < 2 or ( $major == 2 and $minor <= 4 ) )
     {
@@ -1263,7 +1266,8 @@ sub BUILD {
     {
         $self->_throw( EMAXMEMORYPOLICY );
     }
-    $self->_maxmemory(        ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory'        ) )[1] );
+
+    $self->_maxmemory( $maxmemory );
     $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
         if $self->_maxmemory;
 
@@ -1830,7 +1834,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.02
+This documentation refers to C<Redis::CappedCollection> version 0.03
 
 =head1 SYNOPSIS
 
@@ -2341,7 +2345,7 @@ operations with frequent data changes.
 The C<advance_cleanup_bytes> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
 
-The C<advance_cleanup_bytes> value may be less than or equal to L</size>. Otherwise 
+The C<advance_cleanup_bytes> value may be less than or equal to L</size>. Otherwise
 an error will cause the program to halt (C<confess>).
 
 =head3 C<advance_cleanup_num>
@@ -2858,7 +2862,7 @@ Vlad Marchenko
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright (C) 2012 by TrackingSoft LLC.
+Copyright (C) 2012-2013 by TrackingSoft LLC.
 All rights reserved.
 
 This package is free software; you can redistribute it and/or modify it under

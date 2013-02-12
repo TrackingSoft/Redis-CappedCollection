@@ -1,4 +1,4 @@
-Redis::CappedCollection package version 0.02
+Redis::CappedCollection package version 0.03
 ============================================
 
 Redis::CappedCollection module provides fixed sized collections that have
@@ -64,7 +64,7 @@ The basic operation of the Redis::CappedCollection package module:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2012 by TrackingSoft LLC.
+Copyright (C) 2012-2013 by TrackingSoft LLC.
 All rights reserved.
 
 This package is free software; you can redistribute it and/or modify it under
