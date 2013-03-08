@@ -10,18 +10,18 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval "use Test::Exception";
+    eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
 
 BEGIN {
-    eval "use Test::RedisServer";
+    eval "use Test::RedisServer";               ## no critic
     plan skip_all => "because Test::RedisServer required for testing" if $@;
 }
 
 BEGIN {
-    eval "use Test::TCP";
-    plan skip_all => "because Test::TCP required for testing" if $@;
+    eval "use Net::EmptyPort";                  ## no critic
+    plan skip_all => "because Net::EmptyPort required for testing" if $@;
 }
 
 use bytes;
@@ -47,9 +47,19 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
-my $port = empty_port();
+my $port = Net::EmptyPort::empty_port( 32637 ); # 32637-32766 Unassigned
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
+my $exist_real_redis = 1;
+if ( !$real_redis )
+{
+    $exist_real_redis = 0;
+    $redis = eval { Test::RedisServer->new( conf => { port => $port }, _redis => 1 ) };
+    if ( $redis )
+    {
+        eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
+    }
+}
 my $skip_msg;
 $skip_msg = "Redis server is unavailable" unless ( !$@ and $real_redis and $real_redis->ping );
 $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg and !eval { return $real_redis->eval( 'return 1', 0 ) } );
@@ -61,10 +71,11 @@ SKIP: {
 # For real Redis:
 #$redis = $real_redis;
 #isa_ok( $redis, 'Redis' );
+#$port = DEFAULT_PORT;
 
 # For Test::RedisServer
 $real_redis->quit;
-$redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
+$redis = Test::RedisServer->new( conf => { port => $port }, timeout => 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
 my ( $coll, $name, $tmp, $status_key, $queue_key );
@@ -74,9 +85,9 @@ my $msg = "attribute is set correctly";
 # all default
 
 # a class method
-$coll = Redis::CappedCollection->new();
+$coll = Redis::CappedCollection->new( $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ) );
 isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, DEFAULT_SERVER.":".DEFAULT_PORT, $msg;
+is $coll->_server, DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ), $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 is bytes::length( $coll->name ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
 is $coll->size, 0, $msg;
@@ -94,14 +105,14 @@ is $coll->_call_redis( "HGET", $status_key, 'size'   ), $coll->size, "correct st
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 0,           "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 0,           "correct status value";
 
-my $coll_1 = Redis::CappedCollection->new();
-my $coll_2 = Redis::CappedCollection->new();
+my $coll_1 = Redis::CappedCollection->new( $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ) );
+my $coll_2 = Redis::CappedCollection->new( $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ) );
 ok $coll_1->name ne $coll_2->name, "new UUID";
 
 # an object method
-$coll = $coll->new();
+$coll = $coll->new( $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ) );
 isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, DEFAULT_SERVER.":".DEFAULT_PORT, $msg;
+is $coll->_server, DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ), $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 $coll->_call_redis( 'DEL',
@@ -116,7 +127,7 @@ $coll->quit;
 # each argument separately
 
 my $redis2 = Redis->new(
-    server => DEFAULT_SERVER.":".DEFAULT_PORT,
+    server => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
     encoding => undef,
     );
 
@@ -124,16 +135,16 @@ $coll = Redis::CappedCollection->new(
     $redis2,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, DEFAULT_SERVER.":".DEFAULT_PORT, $msg;
+is $coll->_server, DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ), $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 is $coll->_redis->{encoding}, undef, 'encoding not exists';
 
 $coll = Redis::CappedCollection->new(
-    redis => DEFAULT_SERVER.":$port",
+    redis => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, DEFAULT_SERVER.":$port", $msg;
+is $coll->_server, DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ), $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 is $coll->_redis->{encoding}, 'utf8', 'encoding exists';
@@ -142,7 +153,7 @@ $coll = Redis::CappedCollection->new(
     $coll,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, DEFAULT_SERVER.":$port", $msg;
+is $coll->_server, DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ), $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 $coll = Redis::CappedCollection->new(
@@ -156,6 +167,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":
 
 $coll = Redis::CappedCollection->new(
     name => $msg,
+    $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ),
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->name, $msg, $msg;
@@ -169,6 +181,7 @@ $coll->_call_redis( 'DEL',
 
 $coll = Redis::CappedCollection->new(
     size => 12345,
+    $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ),
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->size, 12345, $msg;
@@ -182,6 +195,7 @@ $coll->_call_redis( 'DEL',
 
 $coll = Redis::CappedCollection->new(
     max_datasize => 98765,
+    $exist_real_redis ? () : ( redis => DEFAULT_SERVER.":".$port ),
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->max_datasize, 98765, $msg;
@@ -216,14 +230,14 @@ $tmp = $coll.'';
 foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
-        redis   => DEFAULT_SERVER.":$port",
+        redis   => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
         name    => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }
 is $coll.'', $tmp, "value has not changed";
 
 $coll = Redis::CappedCollection->new(
-    redis   => DEFAULT_SERVER.":$port",
+    redis   => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
     size    => 12345,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -235,13 +249,13 @@ $coll->quit;
 $tmp = $coll.'';
 dies_ok {
     $coll = Redis::CappedCollection->new(
-        redis   => DEFAULT_SERVER.":$port",
+        redis   => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
         name    => $name,
         size    => 54321,
     ) } "expecting to die";
 is $coll.'', $tmp, "value has not changed";
 $coll = Redis::CappedCollection->new(
-    redis   => DEFAULT_SERVER.":$port",
+    redis   => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
@@ -250,7 +264,7 @@ $tmp = $coll.'';
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
-        redis   => DEFAULT_SERVER.":$port",
+        redis   => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
         size    => $arg,
         ) } "expecting to die: ".( $arg || '' );
     is $coll.'', $tmp, "value has not changed";
@@ -260,7 +274,7 @@ $tmp = $coll.'';
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
-        redis           => DEFAULT_SERVER.":$port",
+        redis           => DEFAULT_SERVER.":".( $exist_real_redis ? DEFAULT_PORT : $port ),
         max_datasize    => $arg,
         ) } "expecting to die: ".( $arg || '' );
     is $coll.'', $tmp, "value has not changed";

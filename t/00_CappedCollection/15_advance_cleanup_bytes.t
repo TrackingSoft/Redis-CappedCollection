@@ -10,18 +10,18 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval "use Test::Exception";
+    eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
 
 BEGIN {
-    eval "use Test::RedisServer";
+    eval "use Test::RedisServer";               ## no critic
     plan skip_all => "because Test::RedisServer required for testing" if $@;
 }
 
 BEGIN {
-    eval "use Test::TCP";
-    plan skip_all => "because Test::TCP required for testing" if $@;
+    eval "use Net::EmptyPort";                  ## no critic
+    plan skip_all => "because Net::EmptyPort required for testing" if $@;
 }
 
 use bytes;
@@ -48,9 +48,17 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
-my $port = empty_port();
+my $port = Net::EmptyPort::empty_port( 32637 ); # 32637-32766 Unassigned
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
+if ( !$real_redis )
+{
+    $redis = eval { Test::RedisServer->new( conf => { port => $port }, timeout => 3 ) };
+    if ( $redis )
+    {
+        eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
+    }
+}
 my $skip_msg;
 $skip_msg = "Redis server is unavailable" unless ( !$@ and $real_redis and $real_redis->ping );
 $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg and !eval { return $real_redis->eval( 'return 1', 0 ) } );
@@ -65,7 +73,7 @@ SKIP: {
 
 # For Test::RedisServer
 $real_redis->quit;
-$redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 );
+$redis = Test::RedisServer->new( conf => { port => $port }, timeout => 3 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
 my ( $coll, $name, $tmp, $status_key, $queue_key, $size, $advance_cleanup_bytes, $maxmemory, @arr );
@@ -76,7 +84,7 @@ sub new_connect {
     # For Test::RedisServer
     $redis = Test::RedisServer->new( conf =>
         {
-            port                => empty_port(),
+            port                => Net::EmptyPort::empty_port( 32637 ),
             maxmemory           => $maxmemory,
 #            "vm-enabled"        => 'no',
             "maxmemory-policy"  => 'noeviction',
@@ -181,7 +189,7 @@ is "@arr", "N O P Q", "correct value";
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
-        redis                   => DEFAULT_SERVER.":".empty_port(),
+        redis                   => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( 32637 ),
         advance_cleanup_bytes   => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }

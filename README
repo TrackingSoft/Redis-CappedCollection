@@ -1,10 +1,10 @@
-Redis::CappedCollection package version 0.04
+Redis::CappedCollection package version 0.05
 ============================================
 
 Redis::CappedCollection module provides fixed sized collections that have
 a auto-FIFO age-out feature.
 
-The Redis::CappedCollection package was written, tested, and found working on 
+The Redis::CappedCollection package was written, tested, and found working on
 recent Linux distributions.
 
 INSTALLATION
@@ -32,9 +32,9 @@ Redis::CappedCollection :
 
 The Redis::CappedCollection module has the following optional dependencies:
 
+   Net::EmptyPort
    Test::Exception
    Test::RedisServer
-   Test::TCP
 
 If the optional modules are missing, some "prereq" tests are skipped.
 

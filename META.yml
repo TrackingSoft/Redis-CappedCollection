@@ -3,9 +3,9 @@ abstract: 'Redis::CappedCollection module provides the fixed sized collections t
 author:
   - 'TrackingSoft LLC <sgladkov@trackingsoft.com>'
 build_requires:
+  Net::EmptyPort: 0
   Test::Exception: 0.31
   Test::RedisServer: 0.04
-  Test::TCP: 1.17
 configure_requires:
   ExtUtils::MakeMaker: 0
 dynamic_config: 1
@@ -26,4 +26,4 @@ requires:
   Mouse: 0.97
   Params::Util: 1.07
   Redis: 1.952
-version: 0.04
+version: 0.05

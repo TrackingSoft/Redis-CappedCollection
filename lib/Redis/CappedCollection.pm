@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1845,7 +1845,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.04
+This documentation refers to C<Redis::CappedCollection> version 0.05
 
 =head1 SYNOPSIS
 
@@ -2807,22 +2807,22 @@ packages that are distributed separately from Perl. We recommend that
 you have the following packages installed before you install
 Redis::CappedCollection :
 
-   Data::UUID
-   Digest::SHA1
-   Mouse
-   Params::Util
-   Redis
+    Data::UUID
+    Digest::SHA1
+    Mouse
+    Params::Util
+    Redis
 
 The Redis::CappedCollection module has the following optional dependencies:
 
-   Test::Distribution
-   Test::Exception
-   Test::Kwalitee
-   Test::Perl::Critic
-   Test::Pod
-   Test::Pod::Coverage
-   Test::RedisServer
-   Test::TCP
+    Net::EmptyPort
+    Test::Distribution
+    Test::Exception
+    Test::Kwalitee
+    Test::Perl::Critic
+    Test::Pod
+    Test::Pod::Coverage
+    Test::RedisServer
 
 If the optional modules are missing, some "prereq" tests are skipped.
 

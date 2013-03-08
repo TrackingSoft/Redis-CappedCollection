@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.05  Fri Mar  08 2013
+    CHANGES:
+    - The tests are executed even if the installed Redis server is not running
+
 0.04  Fri Mar  08 2013
     CHANGES:
     - Added method 'ping'
