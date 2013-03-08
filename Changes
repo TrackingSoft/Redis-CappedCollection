@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.04  Fri Mar  08 2013
+    CHANGES:
+    - Added method 'ping'
+
 0.03  Wed Feb  13 2013
     CHANGES:
     - 'new' indirectly detects no connection to the Redis server

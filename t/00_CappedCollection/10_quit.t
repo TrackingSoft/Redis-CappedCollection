@@ -127,4 +127,16 @@ is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
+#-- ping
+
+$coll = Redis::CappedCollection->new(
+    $redis,
+    name    => "Some name",
+    );
+isa_ok( $coll, 'Redis::CappedCollection' );
+
+ok $coll->ping, "server is available";
+$coll->quit;
+ok !$coll->ping, "no server";
+
 }

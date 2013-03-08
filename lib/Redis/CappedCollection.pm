@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1684,6 +1684,17 @@ sub drop {
     return $ret;
 }
 
+sub ping {
+    my $self        = shift;
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my $ret = eval { $self->_redis->ping };
+    $self->_redis_exception( $@ )
+        if $@;
+    return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
+}
+
 sub quit {
     my $self        = shift;
 
@@ -1834,7 +1845,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.03
+This documentation refers to C<Redis::CappedCollection> version 0.04
 
 =head1 SYNOPSIS
 
@@ -2303,13 +2314,23 @@ C<$list_id> must be a non-empty string.
 
 Method returns true if the list is removed, or false otherwise.
 
+=head3 C<ping>
+
+This command is used to test if a connection is still alive.
+
+Returns 1 if a connection is still alive or 0 otherwise.
+
+The following examples illustrate uses of the C<ping> method:
+
+    $is_alive = $coll->ping;
+
 =head3 C<quit>
 
 Ask the Redis server to close the connection.
 
 The following examples illustrate uses of the C<quit> method:
 
-    $jq->quit;
+    $coll->quit;
 
 =head3 C<name>
 

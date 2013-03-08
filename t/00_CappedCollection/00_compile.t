@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 22;
+use Test::More tests => 23;
 
 BEGIN { use_ok 'Redis::CappedCollection' }
 
@@ -22,6 +22,7 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     lists
     drop_collection
     drop
+    ping
     quit
 
     max_datasize
