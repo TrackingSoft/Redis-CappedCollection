@@ -114,6 +114,7 @@ is $coll->advance_cleanup_bytes, 0, $msg;
 $coll->drop_collection;
 
 $advance_cleanup_bytes = 12345;
+$size = 123;
 dies_ok { new_connect() } "expecting to die: 12345 > $size";
 
 $size = 100_000;

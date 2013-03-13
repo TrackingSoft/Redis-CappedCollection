@@ -26,4 +26,4 @@ requires:
   Mouse: 0.97
   Params::Util: 1.07
   Redis: 1.952
-version: 0.05
+version: 0.06

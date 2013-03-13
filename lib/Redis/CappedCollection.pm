@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1277,6 +1277,8 @@ sub BUILD {
     $self->_data_keys(  NAMESPACE.':D:'.$self->name );
     $self->_time_keys(  NAMESPACE.':T:'.$self->name );
 
+$self->_set_size( $maxmemory ) if !$self->size and $maxmemory;
+
     $self->_verify_collection;
 }
 
@@ -1303,7 +1305,7 @@ has 'advance_cleanup_bytes' => (
     default     => 0,
     trigger     => sub {
                         my $self = shift;
-                        $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' );
+                        !$self->size or ( $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' ) );
                     },
     );
 
@@ -1317,6 +1319,7 @@ has 'max_datasize'          => (
     is          => 'rw',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => MAX_DATASIZE,
+    lazy        => 1,
     trigger     => sub {
                         my $self = shift;
                         if ( $self->_redis )
@@ -1845,7 +1848,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.05
+This documentation refers to C<Redis::CappedCollection> version 0.06
 
 =head1 SYNOPSIS
 
