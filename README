@@ -1,4 +1,4 @@
-Redis::CappedCollection package version 0.06
+Redis::CappedCollection package version 0.07
 ============================================
 
 Redis::CappedCollection module provides fixed sized collections that have

@@ -1,8 +1,13 @@
 Revision history for Redis::CappedCollection module
 
-0.06  Wed Mar  14 2013
+0.07  Thu Mar  14 2013
     CHANGES:
-    - 'size' = 'maxmemory' if 'size' is not specified when creating an object
+    - Account for Redis memory overhead when checking collection size:
+    use package variable $REDIS_MEMORY_OVERHEAD to adjust overhead estimate
+
+0.06  Thu Mar  14 2013
+    CHANGES:
+    - Use Redis maxmemory setting to set 'size' if not provided in constructor
 
 0.05  Fri Mar  08 2013
     CHANGES:

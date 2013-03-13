@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -58,6 +58,8 @@ use constant {
     EDATAIDEXISTS       => 8,
     EOLDERTHANALLOWED   => 9,
     };
+
+our $REDIS_MEMORY_OVERHEAD = 3;                 # 3 times more than actual data
 
 my @ERROR = (
     'No error',
@@ -1271,13 +1273,16 @@ sub BUILD {
     $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
         if $self->_maxmemory;
 
+    $self->_set_size( int( $maxmemory / $REDIS_MEMORY_OVERHEAD ) )
+        if !$self->size and $maxmemory;
+    confess 'The maximum size of the data may exceed available memory'
+        if ( $maxmemory and $self->size * $REDIS_MEMORY_OVERHEAD > $maxmemory );
+
     $self->_queue_key(  NAMESPACE.':queue:'.$self->name );
     $self->_status_key( NAMESPACE.':status:'.$self->name );
     $self->_info_keys(  NAMESPACE.':I:'.$self->name );
     $self->_data_keys(  NAMESPACE.':D:'.$self->name );
     $self->_time_keys(  NAMESPACE.':T:'.$self->name );
-
-$self->_set_size( $maxmemory ) if !$self->size and $maxmemory;
 
     $self->_verify_collection;
 }
@@ -1848,7 +1853,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.06
+This documentation refers to C<Redis::CappedCollection> version 0.07
 
 =head1 SYNOPSIS
 
@@ -2464,6 +2469,30 @@ Default Redis server port - 6379.
 =item C<NAMESPACE>
 
 Namespace name used keys on the Redis server - C<'Capped'>.
+
+=back
+
+=head2 GLOBAL VARIABLES
+
+=over
+
+=item C<$REDIS_MEMORY_OVERHEAD>
+
+In addition to user-supplied data, Redis uses memory for its metadata
+and bookkeeping.
+This overhead may cause significantly higher (e.g. 10x) memory usage than actual
+amount of your data stored in collection.
+$REDIS_MEMORY_OVERHEAD is a rough estimate of additional memory usage.
+Collection multiplies its size by $REDIS_MEMORY_OVERHEAD to estimate how much
+memory it will use in Redis.
+Actual usage depends on data item size, average list size and other factors,
+so default estimate may not work in your case.
+Adjust $REDIS_MEMORY_OVERHEAD according to your application needs; this may
+require some experiments to get a good estimate.
+
+By default, the following value is used:
+
+    our $REDIS_MEMORY_OVERHEAD = 3; # 3 times more than actual data
 
 =back
 

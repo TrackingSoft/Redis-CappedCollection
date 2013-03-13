@@ -296,6 +296,6 @@ lives_ok { $coll = Redis::CappedCollection->new(
     redis                   => DEFAULT_SERVER.":$port",
     advance_cleanup_bytes   => 1_000,
     ) } "expecting to live: size = 0, advance_cleanup_bytes > 0";
-is $coll->size, 1_000_000, 'size OK';
+is $coll->size, int( 1_000_000 / $Redis::CappedCollection::REDIS_MEMORY_OVERHEAD ), 'size OK';
 
 }
