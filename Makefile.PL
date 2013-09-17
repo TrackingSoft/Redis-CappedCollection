@@ -18,6 +18,7 @@ my %config = (
         'Mouse'                 => 0.97,
         'Params::Util'          => 1.07,
         'Redis'                 => 1.952,
+        'Try::Tiny'             => 0.18,
         },
     BUILD_REQUIRES              => {
         'Net::EmptyPort'        => 0,

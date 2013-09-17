@@ -151,6 +151,7 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
+#is $coll->_redis->{encoding}, undef, 'encoding not exists';
 is $coll->_redis->{encoding}, 'utf8', 'encoding exists';
 
 $coll = Redis::CappedCollection->new(

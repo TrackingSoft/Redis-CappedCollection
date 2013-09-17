@@ -39,10 +39,11 @@
             "Digest::SHA1" : "2.13",
             "Mouse" : "0.97",
             "Params::Util" : "1.07",
-            "Redis" : "1.952"
+            "Redis" : "1.952",
+            "Try::Tiny" : "0.18",
          }
       }
    },
    "release_status" : "stable",
-   "version" : "0.07"
+   "version" : "0.08"
 }

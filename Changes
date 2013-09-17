@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.08  Wed Sep  18 2013
+    CHANGES:
+    - Use Try::Tiny for proper preservation of $@ .
+
 0.07  Thu Mar  14 2013
     CHANGES:
     - Account for Redis memory overhead when checking collection size:

@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -37,6 +37,7 @@ use Data::UUID;
 use Digest::SHA1    qw( sha1_hex );
 use List::Util      qw( min );
 use Params::Util    qw( _NONNEGINT _STRING _INSTANCE _NUMBER );
+use Try::Tiny;
 
 #-- declarations ---------------------------------------------------------------
 
@@ -63,7 +64,7 @@ our $REDIS_MEMORY_OVERHEAD = 3;                 # 3 times more than actual data
 
 my @ERROR = (
     'No error',
-    'Mismatch argument',
+    'Invalid argument',
     'Data is too large',
     'Error in connection to Redis server',
     "Command not allowed when used memory > 'maxmemory'",
@@ -1697,9 +1698,13 @@ sub ping {
 
     $self->_set_last_errorcode( ENOERROR );
 
-    my $ret = eval { $self->_redis->ping };
-    $self->_redis_exception( $@ )
-        if $@;
+    my $ret;
+    try {
+        $ret = $self->_redis->ping;
+    } catch {
+        $self->_redis_exception( $_ );
+    };
+
     return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
 }
 
@@ -1708,9 +1713,11 @@ sub quit {
 
     $self->_set_last_errorcode( ENOERROR );
     $self->_clear_sha1;
-    eval { $self->_redis->quit };
-    $self->_redis_exception( $@ )
-        if $@;
+    try {
+        $self->_redis->quit;
+    } catch {
+        $self->_redis_exception( $_ );
+    };
 }
 
 #-- private methods ------------------------------------------------------------
@@ -1814,9 +1821,15 @@ sub _redis_constructor {
 
     $self->_set_last_errorcode( ENOERROR );
     my $redis;
-    eval { $redis = Redis->new( server => $self->_server ) };
-    $self->_redis_exception( $@ )
-        if $@;
+    try {
+        $redis = Redis->new(
+            server      => $self->_server,
+#            encoding    => undef,
+        )
+    } catch {
+        $self->_redis_exception( $_ );
+    };
+
     return $redis;
 }
 
@@ -1829,11 +1842,15 @@ sub _call_redis {
     my $self        = shift;
     my $method      = shift;
 
-    my @return;
     $self->_set_last_errorcode( ENOERROR );
-    @return = eval { return $self->_redis->$method( map { ref( $_ ) ? $$_ : $_ } @_ ) };
-    $self->_redis_exception( $@ )
-        if $@;
+
+    my @return;
+    my @args = @_;
+    try {
+        @return = $self->_redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
+    } catch {
+        $self->_redis_exception( $_ );
+    };
 
     return wantarray ? @return : $return[0];
 }
@@ -1853,7 +1870,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.07
+This documentation refers to C<Redis::CappedCollection> version 0.08
 
 =head1 SYNOPSIS
 
@@ -1967,6 +1984,10 @@ on all data.
 If you want to store binary data in the C<Redis::CappedCollection> collection,
 you can disable this automatic encoding by passing an option to
 L<Redis|Redis> C<new>: C<encoding =E<gt> undef>.
+
+Standard encoding for the L<Redis|Redis> used, if C<new> invoked without
+the first argument being an object of C<Redis::JobQueue>
+class or L<Redis|Redis> class.
 
 C<new> optionally takes arguments. These arguments are in key-value pairs.
 
@@ -2871,7 +2892,8 @@ a serious (but hard to detect) problem as Redis server may delete
 the collection element. Therefore the C<Redis::CappedCollection> does not work with
 mode C<maxmemory-police all*> in the C<redis.conf>.
 
-Full name of some Redis keys may not be known at the time of the call
+It may not be possible to use this module with the cluster of Redis servers
+because full name of some Redis keys may not be known at the time of the call
 the Redis Lua script (C<'EVAL'> or C<'EVALSHA'> command).
 So the Redis server may not be able to correctly forward the request
 to the appropriate node in the cluster.
@@ -2916,7 +2938,6 @@ Vlad Marchenko
 =head1 COPYRIGHT AND LICENSE
 
 Copyright (C) 2012-2013 by TrackingSoft LLC.
-All rights reserved.
 
 This package is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself. See I<perlartistic> at
