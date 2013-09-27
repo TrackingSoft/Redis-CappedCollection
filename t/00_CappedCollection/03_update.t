@@ -280,7 +280,7 @@ foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-foreach my $arg ( ( undef, 9999999999999999, \"scalar", [], $uuid ) )
+foreach my $arg ( ( undef, 11111111111, \"scalar", [], $uuid ) )
 {
     dies_ok { $coll->update(
         'id',

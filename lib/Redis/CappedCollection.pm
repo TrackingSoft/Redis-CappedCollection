@@ -6,7 +6,7 @@ use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 use Exporter qw( import );
 our @EXPORT_OK  = qw(
@@ -1275,7 +1275,7 @@ sub BUILD {
         if $self->_maxmemory;
 
     $self->_set_size( int( $maxmemory / $REDIS_MEMORY_OVERHEAD ) )
-        if !$self->size and $maxmemory;
+        if !$self->size && $maxmemory;
     confess 'The maximum size of the data may exceed available memory'
         if ( $maxmemory and $self->size * $REDIS_MEMORY_OVERHEAD > $maxmemory );
 
@@ -1311,7 +1311,7 @@ has 'advance_cleanup_bytes' => (
     default     => 0,
     trigger     => sub {
                         my $self = shift;
-                        !$self->size or ( $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' ) );
+                        !$self->size || ( $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' ) );
                     },
     );
 
@@ -1870,7 +1870,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.08
+This documentation refers to C<Redis::CappedCollection> version 0.09
 
 =head1 SYNOPSIS
 
@@ -2425,7 +2425,7 @@ The C<max_datasize> attribute value is used in the L<constructor|/CONSTRUCTOR>
 and operations data entry on the Redis server.
 
 The L<constructor|/CONSTRUCTOR> uses the smaller of the values of 512MB and
-C<maxmemory> limit from a C<redis.conf> file.
+C<maxmemory> limit from a F<redis.conf> file.
 
 =head3 C<older_allowed>
 
@@ -2459,7 +2459,7 @@ the item size and length of lists, the size of data identifiers, etc.
 The effective value of C<big_data_threshold> can be controlled with server settings
 (C<hahs-max-ziplist-entries>, C<hash-max-ziplist-value>,
 C<zset-max-ziplist-entries>, C<zset-max-ziplist-value>)
-in the C<redis.conf> file.
+in the F<redis.conf> file.
 
 =head3 C<last_errorcode>
 
@@ -2572,11 +2572,11 @@ This means that an error in connection to Redis server was detected.
 =item C<EMAXMEMORYLIMIT>
 
 This means that the command is not allowed when used memory > C<maxmemory>
-in the C<redis.conf> file.
+in the F<redis.conf> file.
 
 =item C<EMAXMEMORYPOLICY>
 
-This means that you are using the C<maxmemory-police all*> in the C<redis.conf> file.
+This means that you are using the C<maxmemory-police all*> in the F<redis.conf> file.
 
 =item C<ECOLLDELETED>
 
@@ -2887,10 +2887,10 @@ for all dependencies and compiling them manually).
 
 Need a Redis server version 2.6 or higher as module uses Redis Lua scripting.
 
-The use of C<maxmemory-police all*> in the C<redis.conf> file could lead to
+The use of C<maxmemory-police all*> in the F<redis.conf> file could lead to
 a serious (but hard to detect) problem as Redis server may delete
 the collection element. Therefore the C<Redis::CappedCollection> does not work with
-mode C<maxmemory-police all*> in the C<redis.conf>.
+mode C<maxmemory-police all*> in the F<redis.conf>.
 
 It may not be possible to use this module with the cluster of Redis servers
 because full name of some Redis keys may not be known at the time of the call
@@ -2898,8 +2898,15 @@ the Redis Lua script (C<'EVAL'> or C<'EVALSHA'> command).
 So the Redis server may not be able to correctly forward the request
 to the appropriate node in the cluster.
 
-We strongly recommend using the option C<maxmemory> in the C<redis.conf> file if
+We strongly recommend using the option C<maxmemory> in the F<redis.conf> file if
 the data set may be large.
+
+WARNING: According to C<initServer()> function in F<redis.c> :
+
+    /* 32 bit instances are limited to 4GB of address space, so if there is
+     * no explicit limit in the user provided configuration we set a limit
+     * at 3 GB using maxmemory with 'noeviction' policy'. This avoids
+     * useless crashes of the Redis instance for out of memory. */
 
 The C<Redis::CappedCollection> module was written, tested, and found working
 on recent Linux distributions.

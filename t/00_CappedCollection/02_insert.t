@@ -27,6 +27,7 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
+use Params::Util    qw( _NONNEGINT );
 use Redis::CappedCollection qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -103,7 +104,7 @@ foreach my $type ( qw( I D T ) )
 }
 is $coll->_call_redis( "HGET", $status_key, 'length' ), bytes::length( "Some stuff" ), "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 1, "correct status value";
-is $coll->_call_redis( "HGET", $status_key, 'size'   ), 0, "correct status value";
+ok defined( _NONNEGINT( $coll->_call_redis( "HGET", $status_key, 'size' ) ) ), "correct status value";
 
 $tmp = $coll->insert( "Some new stuff", "Some id" );
 is $tmp, $id, "correct result";

@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.09  Fri Sep  27 2013
+    FIXES:
+    - Tests fine-tuned to the correct execution of 32-bit systems.
+
 0.08  Wed Sep  18 2013
     CHANGES:
     - Use Try::Tiny for proper preservation of $@ .
