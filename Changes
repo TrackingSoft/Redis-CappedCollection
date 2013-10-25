@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.10  Fri Oct  25 2013
+    FIXES:
+    - Fix runtime loading of Test::*
+
 0.09  Fri Sep  27 2013
     FIXES:
     - Tests fine-tuned to the correct execution of 32-bit systems.

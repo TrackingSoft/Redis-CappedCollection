@@ -27,4 +27,4 @@ requires:
   Params::Util: 1.07
   Redis: 1.952
   Try::Tiny: 0.18
-version: 0.09
+version: 0.10

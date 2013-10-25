@@ -1,14 +1,31 @@
 package Redis::CappedCollection;
-use 5.010;
 
-# Pragmas
+=head1 NAME
+
+Redis::CappedCollection - Provides fixed sized collections that have
+a auto-FIFO age-out feature.
+
+=head1 VERSION
+
+This documentation refers to C<Redis::CappedCollection> version 0.10
+
+=cut
+
+#-- Pragmas --------------------------------------------------------------------
+
+use 5.010;
 use strict;
 use warnings;
 use bytes;
 
-our $VERSION = '0.09';
+# ENVIRONMENT ------------------------------------------------------------------
 
-use Exporter qw( import );
+our $VERSION = '0.10';
+
+use Exporter qw(
+    import
+);
+
 our @EXPORT_OK  = qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -24,42 +41,288 @@ our @EXPORT_OK  = qw(
     EREDIS
     EDATAIDEXISTS
     EOLDERTHANALLOWED
-    );
+);
 
 #-- load the modules -----------------------------------------------------------
 
-# Modules
+use Carp;
+use Data::UUID;
+use Digest::SHA1 qw(
+    sha1_hex
+);
+use List::Util qw(
+    min
+);
 use Mouse;
 use Mouse::Util::TypeConstraints;
-use Carp;
+use Params::Util qw(
+    _INSTANCE
+    _NONNEGINT
+    _NUMBER
+    _STRING
+);
 use Redis;
-use Data::UUID;
-use Digest::SHA1    qw( sha1_hex );
-use List::Util      qw( min );
-use Params::Util    qw( _NONNEGINT _STRING _INSTANCE _NUMBER );
 use Try::Tiny;
 
 #-- declarations ---------------------------------------------------------------
 
-use constant {
-    DEFAULT_SERVER      => 'localhost',
-    DEFAULT_PORT        => 6379,
+=head1 SYNOPSIS
 
-    NAMESPACE           => 'Capped',
-    MAX_DATASIZE        => 512*1024*1024,       # A String value can be at max 512 Megabytes in length.
+    use 5.010;
+    use strict;
+    use warnings;
 
-    ENOERROR            => 0,
-    EMISMATCHARG        => 1,
-    EDATATOOLARGE       => 2,
-    ENETWORK            => 3,
-    EMAXMEMORYLIMIT     => 4,
-    EMAXMEMORYPOLICY    => 5,
-    ECOLLDELETED        => 6,
-    EREDIS              => 7,
-    EDATAIDEXISTS       => 8,
-    EOLDERTHANALLOWED   => 9,
-    };
+    #-- Common
+    use Redis::CappedCollection qw(
+        DEFAULT_SERVER
+        DEFAULT_PORT
+    );
 
+    my $server = DEFAULT_SERVER.':'.DEFAULT_PORT;
+    my $coll = Redis::CappedCollection->new( redis => $server );
+
+    #-- Producer
+    my $list_id = $coll->insert( 'Some data stuff' );
+
+    # Change the element of the list with the ID $list_id
+    $updated = $coll->update( $list_id, $data_id, 'Some new data stuff' );
+
+    #-- Consumer
+    # Get data from a list with the ID $list_id
+    @data = $coll->receive( $list_id );
+    # or to obtain the data in the order they are received
+    while ( my ( $list_id, $data ) = $coll->pop_oldest ) {
+        say "List '$list_id' had '$data'";
+    }
+
+To see a brief but working code example of the C<Redis::CappedCollection>
+package usage look at the L</"An Example"> section.
+
+To see a description of the used C<Redis::CappedCollection> data
+structure (on Redis server) look at the L</"CappedCollection data structure">
+section.
+
+=head1 ABSTRACT
+
+Redis::CappedCollection module provides fixed sized collections that have
+a auto-FIFO age-out feature.
+
+=head1 DESCRIPTION
+
+The module provides an object oriented API.
+This makes a simple and powerful interface to these services.
+
+The main features of the package are:
+
+=over 3
+
+=item *
+
+Provides an object oriented model of communication.
+
+=item *
+
+Support the work with data structures on the Redis server.
+
+=item *
+
+Supports the automatic creation of capped collection, status monitoring,
+updating the data set, obtaining consistent data from the collection,
+automatic data removal, the classification of possible errors.
+
+=item *
+
+Simple methods for organizing producer and consumer clients.
+
+=back
+
+Capped collections are fixed sized collections that have an auto-FIFO
+age-out feature (age out is based on the time of the corresponding inserted data).
+With the built-in FIFO mechanism, you are not at risk of using
+excessive disk space.
+Capped collections keep data in their time corresponding inserted data order
+automatically (in the respective lists of data).
+Capped collections automatically maintain insertion order for the data lists
+in the collection.
+
+You may insert new data in the capped collection.
+If there is a list with the specified ID, the data is inserted into the existing list,
+otherwise it is inserted into a new list.
+
+You may update the existing data in the collection.
+
+Once the space is fully utilized, newly added data will replace
+the oldest data in the collection.
+Limits are specified when the collection is created.
+
+Old data with the same time will be forced out in no specific order.
+
+The collection does not allow deleting data.
+
+Automatic Age Out:
+If you know you want data to automatically "roll out" over time as it ages,
+a capped collection can be an easier way to support than writing manual removal
+via cron scripts.
+
+=head2 EXPORT
+
+None by default.
+
+Additional constants are available for import, which can be used
+to define some type of parameters.
+
+These are the defaults:
+
+=head3 C<DEFAULT_SERVER>
+
+Default Redis local server - C<'localhost'>.
+
+=cut
+use constant DEFAULT_SERVER => 'localhost';
+
+=head3 C<DEFAULT_PORT>
+
+Default Redis server port - 6379.
+
+=cut
+use constant DEFAULT_PORT   => 6379;
+
+=head3 C<NAMESPACE>
+
+Namespace name used keys on the Redis server - C<'Capped'>.
+
+=cut
+use constant NAMESPACE      => 'Capped';
+
+=over
+
+=item Error codes are identified
+
+More details about error codes are provided in L</DIAGNOSTICS> section.
+
+=back
+
+Possible error codes:
+
+=cut
+
+=over 3
+
+=item C<ENOERROR>
+
+0 - No error
+
+=cut
+use constant ENOERROR           => 0;
+
+=item C<EMISMATCHARG>
+
+1 - Invalid argument.
+
+This means that you didn't give the right argument to a C<new>
+or to other L<method|/METHODS>.
+
+=cut
+use constant EMISMATCHARG       => 1;
+
+=item C<EDATATOOLARGE>
+
+2 - Data is too large.
+
+=cut
+use constant EDATATOOLARGE      => 2;
+
+=item C<ENETWORK>
+
+3 - Error in connection to Redis server.
+
+=cut
+use constant ENETWORK           => 3;
+
+=item C<EMAXMEMORYLIMIT>
+
+4 - Command not allowed when used memory > 'maxmemory'.
+
+This means that the command is not allowed when used memory > C<maxmemory>
+in the F<redis.conf> file.
+
+=cut
+use constant EMAXMEMORYLIMIT    => 4;
+
+=item C<EMAXMEMORYPOLICY>
+
+5 - Data may be removed by maxmemory-policy all* .
+
+This means that you are using the C<maxmemory-police all*> in the F<redis.conf> file.
+
+=cut
+use constant EMAXMEMORYPOLICY   => 5;
+
+=item C<ECOLLDELETED>
+
+6 - Collection was removed prior to use.
+
+This means that the system part of the collection was removed prior to use.
+
+=cut
+use constant ECOLLDELETED       => 6;
+
+=item C<EREDIS>
+
+7 - Redis error message.
+
+This means that other Redis error message detected.
+
+=cut
+use constant EREDIS             => 7;
+
+=item C<EDATAIDEXISTS>
+
+8 - Attempt to add data to an existing ID
+
+This means that you are trying to insert data with an ID that is already in
+the data list.
+
+=cut
+use constant EDATAIDEXISTS      => 8;
+
+=item C<EOLDERTHANALLOWED>
+
+9 - Attempt to add data over outdated
+
+This means that you are trying to insert the data with the time less than
+the time of the data that has been deleted from the data list.
+
+=back
+
+=cut
+use constant EOLDERTHANALLOWED  => 9;
+
+=head2 GLOBAL VARIABLES
+
+=over
+
+=item C<$REDIS_MEMORY_OVERHEAD>
+
+In addition to user-supplied data, Redis uses memory for its metadata
+and bookkeeping.
+This overhead may cause significantly higher (e.g. 10x) memory usage than actual
+amount of your data stored in collection.
+$REDIS_MEMORY_OVERHEAD is a rough estimate of additional memory usage.
+Collection multiplies its size by $REDIS_MEMORY_OVERHEAD to estimate how much
+memory it will use in Redis.
+Actual usage depends on data item size, average list size and other factors,
+so default estimate may not work in your case.
+Adjust $REDIS_MEMORY_OVERHEAD according to your application needs; this may
+require some experiments to get a good estimate.
+
+By default, the following value is used:
+
+    our $REDIS_MEMORY_OVERHEAD = 3; # 3 times more than actual data
+
+=back
+
+=cut
 our $REDIS_MEMORY_OVERHEAD = 3;                 # 3 times more than actual data
 
 my @ERROR = (
@@ -73,7 +336,9 @@ my @ERROR = (
     'Redis error message',
     'Attempt to add data to an existing ID',
     'Attempt to add data over outdated',
-    );
+);
+
+use constant MAX_DATASIZE   => 512*1024*1024;   # A String value can be at max 512 Megabytes in length.
 
 my $uuid = new Data::UUID;
 
@@ -1193,776 +1458,21 @@ subtype __PACKAGE__.'::NonNegInt',
     as 'Int',
     where { $_ >= 0 },
     message { ( $_ || '' ).' is not a non-negative integer!' }
-    ;
+;
 
 subtype __PACKAGE__.'::NonEmptNameStr',
     as 'Str',
-    where { $_ ne '' and $_ !~ /:/ },
+    where { $_ ne '' && $_ !~ /:/ },
     message { ( $_ || '' ).' is not a non-empty string!' }
-    ;
+;
 
 subtype __PACKAGE__.'::DataStr',
     as 'Str',
     where { bytes::length( $_ ) <= MAX_DATASIZE },
     message { "'".( $_ || '' )."' is not a valid data string!" }
-    ;
+;
 
 #-- constructor ----------------------------------------------------------------
-
-around BUILDARGS => sub {
-    my $orig  = shift;
-    my $class = shift;
-
-    if ( _INSTANCE( $_[0], 'Redis' ) )
-    {
-        my $redis = shift;
-        return $class->$orig(
-# have to look into the Redis object ...
-            redis   => $redis->{server},
-            _redis  => $redis,
-            @_
-            );
-    }
-    elsif ( _INSTANCE( $_[0], 'Test::RedisServer' ) )
-    {
-# to test only
-        my $redis = shift;
-        return $class->$orig(
-# have to look into the Test::RedisServer object ...
-            redis   => '127.0.0.1:'.$redis->conf->{port},
-            @_
-            );
-    }
-    elsif ( _INSTANCE( $_[0], __PACKAGE__ ) )
-    {
-        my $coll = shift;
-        return $class->$orig(
-                    redis   => $coll->_server,
-                    _redis  => $coll->_redis,
-                    @_
-                );
-    }
-    else
-    {
-        return $class->$orig( @_ );
-    }
-};
-
-sub BUILD {
-    my $self = shift;
-
-    $self->_redis( $self->_redis_constructor )
-        unless ( $self->_redis );
-
-    my ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
-    defined( _NONNEGINT( $maxmemory ) ) or $self->_throw( ENETWORK );
-
-    my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
-    if ( $major < 2 or ( $major == 2 and $minor <= 4 ) )
-    {
-        $self->_set_last_errorcode( EREDIS );
-        confess "Need a Redis server version 2.6 or higher";
-    }
-
-    $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
-    if ( $self->_maxmemory_policy =~ /^all/ )
-    {
-        $self->_throw( EMAXMEMORYPOLICY );
-    }
-
-    $self->_maxmemory( $maxmemory );
-    $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
-        if $self->_maxmemory;
-
-    $self->_set_size( int( $maxmemory / $REDIS_MEMORY_OVERHEAD ) )
-        if !$self->size && $maxmemory;
-    confess 'The maximum size of the data may exceed available memory'
-        if ( $maxmemory and $self->size * $REDIS_MEMORY_OVERHEAD > $maxmemory );
-
-    $self->_queue_key(  NAMESPACE.':queue:'.$self->name );
-    $self->_status_key( NAMESPACE.':status:'.$self->name );
-    $self->_info_keys(  NAMESPACE.':I:'.$self->name );
-    $self->_data_keys(  NAMESPACE.':D:'.$self->name );
-    $self->_time_keys(  NAMESPACE.':T:'.$self->name );
-
-    $self->_verify_collection;
-}
-
-#-- public attributes ----------------------------------------------------------
-
-has 'name'                  => (
-    is          => 'ro',
-    clearer     => '_clear_name',
-    isa         => __PACKAGE__.'::NonEmptNameStr',
-    default     => sub { return $uuid->create_str },
-    );
-
-has 'size'                  => (
-    reader      => 'size',
-    writer      => '_set_size',
-    clearer     => '_clear_size',
-    isa         => __PACKAGE__.'::NonNegInt',
-    default     => 0,
-    );
-
-has 'advance_cleanup_bytes' => (
-    is          => 'rw',
-    isa         => __PACKAGE__.'::NonNegInt',
-    default     => 0,
-    trigger     => sub {
-                        my $self = shift;
-                        !$self->size || ( $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' ) );
-                    },
-    );
-
-has 'advance_cleanup_num'   => (
-    is          => 'rw',
-    isa         => __PACKAGE__.'::NonNegInt',
-    default     => 0,
-    );
-
-has 'max_datasize'          => (
-    is          => 'rw',
-    isa         => __PACKAGE__.'::NonNegInt',
-    default     => MAX_DATASIZE,
-    lazy        => 1,
-    trigger     => sub {
-                        my $self = shift;
-                        if ( $self->_redis )
-                        {
-                            $self->max_datasize <= ( $self->_maxmemory ? min( $self->_maxmemory, MAX_DATASIZE ) : MAX_DATASIZE )
-                                || $self->_throw( EMISMATCHARG, 'max_datasize' );
-                        }
-                    },
-    );
-
-has 'older_allowed'         => (
-    is          => 'ro',
-    isa         => 'Bool',
-    default     => 1,
-    );
-
-has 'big_data_threshold'    => (
-    is          => 'ro',
-    isa         => __PACKAGE__.'::NonNegInt',
-    default     => 0,
-    );
-
-has 'last_errorcode'        => (
-    reader      => 'last_errorcode',
-    writer      => '_set_last_errorcode',
-    isa         => 'Int',
-    default     => 0,
-    );
-
-#-- private attributes ---------------------------------------------------------
-
-has '_server'               => (
-    is          => 'rw',
-    init_arg    => 'redis',
-    isa         => 'Str',
-    default     => DEFAULT_SERVER.':'.DEFAULT_PORT,
-    trigger     => sub {
-                        my $self = shift;
-                        $self->_server( $self->_server.':'.DEFAULT_PORT )
-                            unless $self->_server =~ /:/;
-                    },
-    );
-
-has '_redis'                => (
-    is          => 'rw',
-# 'Maybe[Test::RedisServer]' to test only
-    isa         => 'Maybe[Redis] | Maybe[Test::RedisServer]',
-    );
-
-has '_maxmemory'            => (
-    is          => 'rw',
-    isa         => __PACKAGE__.'::NonNegInt',
-    init_arg    => undef,
-    );
-
-foreach my $attr_name ( qw(
-    _maxmemory_policy
-    _queue_key
-    _status_key
-    _info_keys
-    _data_keys
-    _time_keys
-    ) )
-{
-    has $attr_name          => (
-        is          => 'rw',
-        isa         => 'Str',
-        init_arg    => undef,
-        );
-}
-
-has '_lua_scripts'          => (
-    is          => 'ro',
-    isa         => 'HashRef[Str]',
-    lazy        => 1,
-    init_arg    => undef,
-    builder     => sub { return {}; },
-    );
-
-#-- public methods -------------------------------------------------------------
-
-sub insert {
-    my $self        = shift;
-    my $data        = shift;
-    my $list_id     = shift // $uuid->create_str;
-    my $data_id     = shift // '';
-    my $data_time   = shift // time;
-
-    $data                                                   // $self->_throw( EMISMATCHARG, 'data' );
-    ( defined( _STRING( $data ) ) or $data eq '' )          || $self->_throw( EMISMATCHARG, 'data' );
-    _STRING( $list_id )                                     // $self->_throw( EMISMATCHARG, 'list_id' );
-    $list_id !~ /:/                                         || $self->_throw( EMISMATCHARG, 'list_id' );
-    ( defined( _STRING( $data_id ) ) or $data_id eq '' )    || $self->_throw( EMISMATCHARG, 'data_id' );
-    ( defined( _NUMBER( $data_time ) ) and $data_time > 0 ) || $self->_throw( EMISMATCHARG, 'data_time' );
-
-    my $data_len = bytes::length( $data );
-    $self->size and ( ( $data_len <= $self->size )          || $self->_throw( EMISMATCHARG, 'data' ) );
-    ( $data_len <= $self->max_datasize )                    || $self->_throw( EDATATOOLARGE );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my ( $error, $status_exist, $result_data_id ) = $self->_call_redis(
-        $self->_lua_script_cmd( 'insert' ),
-        0,
-        $self->name,
-        $self->size,
-        $self->advance_cleanup_bytes,
-        $self->advance_cleanup_num,
-        $self->big_data_threshold,
-        $list_id,
-        $data_id,
-        $data,
-        $data_time,
-        );
-
-    if ( $error ) { $self->_throw( $error ); }
-
-    unless ( $status_exist )
-    {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
-    }
-
-    return wantarray ? ( $list_id, $result_data_id ) : $list_id;
-}
-
-sub update {
-    my $self        = shift;
-    my $list_id     = shift;
-    my $data_id     = shift;
-    my $data        = shift;
-
-    _STRING( $list_id )                             // $self->_throw( EMISMATCHARG, 'list_id' );
-    defined( _STRING( $data_id ) )                  || $self->_throw( EMISMATCHARG, 'data_id' );
-    $data                                           // $self->_throw( EMISMATCHARG, 'data' );
-    ( defined( _STRING( $data ) ) or $data eq '' )  || $self->_throw( EMISMATCHARG, 'data' );
-
-    my $data_len = bytes::length( $data );
-    $self->size and ( ( $data_len <= $self->size )  || $self->_throw( EMISMATCHARG, 'data' ) );
-    ( $data_len <= $self->max_datasize )            || $self->_throw( EDATATOOLARGE );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my ( $status_exist, $ret ) = $self->_call_redis(
-        $self->_lua_script_cmd( 'update' ),
-        0,
-        $self->name,
-        $self->size,
-        $self->advance_cleanup_bytes,
-        $self->advance_cleanup_num,
-        $self->big_data_threshold,
-        $list_id,
-        $data_id,
-        $data,
-        );
-
-    unless ( $status_exist )
-    {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
-    }
-
-    return $ret;
-}
-
-sub receive {
-    my $self        = shift;
-    my $list_id     = shift;
-    my $data_id     = shift;
-
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    if ( defined( $data_id ) and $data_id ne '' )
-    {
-        _STRING( $data_id ) // $self->_throw( EMISMATCHARG, 'data_id' );
-        return $self->_call_redis(
-            $self->_lua_script_cmd( 'receive' ),
-            0,
-            $self->name,
-            $self->big_data_threshold,
-            $list_id,
-            'val',
-            $data_id,
-            );
-    }
-    else
-    {
-        if ( wantarray )
-        {
-            return $self->_call_redis(
-                $self->_lua_script_cmd( 'receive' ),
-                0,
-                $self->name,
-                $self->big_data_threshold,
-                $list_id,
-                defined( $data_id ) ? 'all' : 'vals',
-                '',
-                );
-        }
-        else
-        {
-            return $self->_call_redis(
-                $self->_lua_script_cmd( 'receive' ),
-                0,
-                $self->name,
-                $self->big_data_threshold,
-                $list_id,
-                'len',
-                '',
-                );
-        }
-    }
-}
-
-sub pop_oldest {
-    my $self        = shift;
-
-    my @ret;
-    $self->_set_last_errorcode( ENOERROR );
-
-    my ( $queue_exist, $status_exist, $excess_list_exist, $excess_id, $excess_data ) =
-        $self->_call_redis(
-            $self->_lua_script_cmd( 'pop_oldest' ),
-            0,
-            $self->name,
-            $self->big_data_threshold,
-            );
-
-    if ( $queue_exist )
-    {
-        unless ( $status_exist )
-        {
-            $self->_clear_sha1;
-            $self->_throw( ECOLLDELETED );
-        }
-        unless ( $excess_list_exist )
-        {
-            $self->_clear_sha1;
-            $self->_throw( EMAXMEMORYPOLICY );
-        }
-        @ret = ( $excess_id, $excess_data );
-    }
-
-    return @ret;
-}
-
-sub collection_info {
-    my $self        = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my @ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'collection_info' ),
-        0,
-        $self->name,
-        );
-
-    unless ( shift @ret )
-    {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
-    }
-
-    return {
-        length      => $ret[0],
-        lists       => $ret[1],
-        items       => $ret[2],
-        oldest_time => $ret[3] ? $ret[3] + 0 : $ret[3],
-        };
-}
-
-sub info {
-    my $self        = shift;
-    my $list_id     = shift;
-
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my @ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'info' ),
-        0,
-        $self->name,
-        $self->big_data_threshold,
-        $list_id,
-        );
-
-    unless ( shift @ret )
-    {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
-    }
-
-    return {
-        items               => $ret[0],
-        oldest_time         => $ret[1] ? $ret[1] + 0 : $ret[1],
-        last_removed_time   => $ret[2] ? $ret[2] + 0 : $ret[2],
-        };
-}
-
-sub exists {
-    my $self        = shift;
-    my $list_id     = shift;
-
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
-}
-
-sub lists {
-    my $self        = shift;
-    my $pattern     = shift // '*';
-
-    _STRING( $pattern ) // $self->_throw( EMISMATCHARG, 'pattern' );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
-}
-
-sub drop_collection {
-    my $self        = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my $ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'drop_collection' ),
-        0,
-        $self->name,
-        );
-
-    $self->_clear_name;
-    $self->_clear_size;
-    $self->_clear_sha1;
-
-    return $ret;
-}
-
-sub drop {
-    my $self        = shift;
-    my $list_id     = shift;
-
-    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my ( $status_exist, $ret ) = $self->_call_redis(
-        $self->_lua_script_cmd( 'drop' ),
-        0,
-        $self->name,
-        $self->big_data_threshold,
-        $list_id,
-        );
-
-    unless ( $status_exist )
-    {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
-    }
-
-    return $ret;
-}
-
-sub ping {
-    my $self        = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my $ret;
-    try {
-        $ret = $self->_redis->ping;
-    } catch {
-        $self->_redis_exception( $_ );
-    };
-
-    return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
-}
-
-sub quit {
-    my $self        = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-    $self->_clear_sha1;
-    try {
-        $self->_redis->quit;
-    } catch {
-        $self->_redis_exception( $_ );
-    };
-}
-
-#-- private methods ------------------------------------------------------------
-
-sub _lua_script_cmd {
-    my $self        = shift;
-    my $name        = shift;
-
-    my $sha1 = $self->_lua_scripts->{ $name };
-    unless ( $sha1 )
-    {
-        $sha1 = $self->_lua_scripts->{ $name } = sha1_hex( $lua_script_body{ $name } );
-        unless ( ( $self->_call_redis( 'SCRIPT', 'EXISTS', $sha1 ) )[0] )
-        {
-            return( 'EVAL', $lua_script_body{ $name } );
-        }
-    }
-    return( 'EVALSHA', $sha1 );
-}
-
-sub _data_list_key {
-    my $self        = shift;
-    my $list_id     = shift;
-
-    return( $self->_data_keys.':'.$list_id );
-}
-
-sub _verify_collection {
-    my $self    = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my ( $status_exist, $size, $older_allowed, $big_data_threshold ) = $self->_call_redis(
-        $self->_lua_script_cmd( 'verify_collection' ),
-        0,
-        $self->name,
-        $self->size || 0,
-        $self->older_allowed ? 1 : 0,
-        $self->big_data_threshold || 0,
-        );
-
-    if ( $status_exist )
-    {
-        $self->_set_size( $size ) unless $self->size;
-        $size               == $self->size               or $self->_throw( EMISMATCHARG, 'size' );
-        $older_allowed      == $self->older_allowed      or $self->_throw( EMISMATCHARG, 'older_allowed' );
-        $big_data_threshold == $self->big_data_threshold or $self->_throw( EMISMATCHARG, 'big_data_threshold' );
-    }
-}
-
-sub _throw {
-    my $self    = shift;
-    my $err     = shift;
-    my $prefix  = shift;
-
-    $self->_set_last_errorcode( $err );
-    confess( ( $prefix ? "$prefix : " : '' ).$ERROR[ $err ] );
-}
-
-sub _redis_exception {
-    my $self    = shift;
-    my $error   = shift;
-
-# Use the error messages from Redis.pm
-    if (
-           $error =~ /^Could not connect to Redis server at /
-        or $error =~ /^Can't close socket: /
-        or $error =~ /^Not connected to any server/
-# Maybe for pub/sub only
-        or $error =~ /^Error while reading from Redis server: /
-        or $error =~ /^Redis server closed connection/
-        )
-    {
-        $self->_set_last_errorcode( ENETWORK );
-    }
-    elsif (
-           $error =~ /[\S+\s?]ERR command not allowed when used memory > 'maxmemory'/
-        or $error =~ /[\S+\s?]OOM command not allowed when used memory > 'maxmemory'/
-        or $error =~ /\[EVALSHA\] NOSCRIPT No matching script. Please use EVAL./
-        )
-    {
-        $self->_set_last_errorcode( EMAXMEMORYLIMIT );
-        $self->_clear_sha1;
-    }
-    else
-    {
-        $self->_set_last_errorcode( EREDIS );
-    }
-
-    die $error;
-}
-
-sub _clear_sha1 {
-    my $self    = shift;
-
-    delete @{$self->_lua_scripts}{ keys %{$self->_lua_scripts} };
-}
-
-sub _redis_constructor {
-    my $self    = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-    my $redis;
-    try {
-        $redis = Redis->new(
-            server      => $self->_server,
-#            encoding    => undef,
-        )
-    } catch {
-        $self->_redis_exception( $_ );
-    };
-
-    return $redis;
-}
-
-# Keep in mind the default 'redis.conf' values:
-# Close the connection after a client is idle for N seconds (0 to disable)
-#    timeout 300
-
-# Send a request to Redis
-sub _call_redis {
-    my $self        = shift;
-    my $method      = shift;
-
-    $self->_set_last_errorcode( ENOERROR );
-
-    my @return;
-    my @args = @_;
-    try {
-        @return = $self->_redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
-    } catch {
-        $self->_redis_exception( $_ );
-    };
-
-    return wantarray ? @return : $return[0];
-}
-
-#-- Closes and cleans up -------------------------------------------------------
-
-no Mouse::Util::TypeConstraints;
-no Mouse;                                       # keywords are removed from the package
-__PACKAGE__->meta->make_immutable();
-
-__END__
-
-=head1 NAME
-
-Redis::CappedCollection - Provides fixed sized collections that have
-a auto-FIFO age-out feature.
-
-=head1 VERSION
-
-This documentation refers to C<Redis::CappedCollection> version 0.09
-
-=head1 SYNOPSIS
-
-    #-- Common
-    use Redis::CappedCollection qw( DEFAULT_SERVER DEFAULT_PORT )
-
-    my $server = DEFAULT_SERVER.':'.DEFAULT_PORT;
-    my $coll = Redis::CappedCollection->new( redis => $server );
-
-    #-- Producer
-    my $list_id = $coll->insert( 'Some data stuff' );
-
-    # Change the element of the list with the ID $list_id
-    $updated = $coll->update( $list_id, $data_id, 'Some new data stuff' );
-
-    #-- Consumer
-    # Get data from a list with the ID $list_id
-    @data = $coll->receive( $list_id );
-    # or to obtain the data in the order they are received
-    while ( my ( $list_id, $data ) = $coll->pop_oldest )
-    {
-        print "List '$list_id' had '$data'\n";
-    }
-
-To see a brief but working code example of the C<Redis::CappedCollection>
-package usage look at the L</"An Example"> section.
-
-To see a description of the used C<Redis::CappedCollection> data
-structure (on Redis server) look at the L</"CappedCollection data structure">
-section.
-
-=head1 ABSTRACT
-
-Redis::CappedCollection module provides fixed sized collections that have
-a auto-FIFO age-out feature.
-
-=head1 DESCRIPTION
-
-The module provides an object oriented API.
-This makes a simple and powerful interface to these services.
-
-The main features of the package are:
-
-=over 3
-
-=item *
-
-Provides an object oriented model of communication.
-
-=item *
-
-Support the work with data structures on the Redis server.
-
-=item *
-
-Supports the automatic creation of capped collection, status monitoring,
-updating the data set, obtaining consistent data from the collection,
-automatic data removal, the classification of possible errors.
-
-=item *
-
-Simple methods for organizing producer and consumer clients.
-
-=back
-
-Capped collections are fixed sized collections that have an auto-FIFO
-age-out feature (age out is based on the time of the corresponding inserted data).
-With the built-in FIFO mechanism, you are not at risk of using
-excessive disk space.
-Capped collections keep data in their time corresponding inserted data order
-automatically (in the respective lists of data).
-Capped collections automatically maintain insertion order for the data lists
-in the collection.
-
-You may insert new data in the capped collection.
-If there is a list with the specified ID, the data is inserted into the existing list,
-otherwise it is inserted into a new list.
-
-You may update the existing data in the collection.
-
-Once the space is fully utilized, newly added data will replace
-the oldest data in the collection.
-Limits are specified when the collection is created.
-
-Old data with the same time will be forced out in no specific order.
-
-The collection does not allow deleting data.
-
-Automatic Age Out:
-If you know you want data to automatically "roll out" over time as it ages,
-a capped collection can be an easier way to support than writing manual removal
-via cron scripts.
 
 =head2 CONSTRUCTOR
 
@@ -2030,7 +1540,7 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # Redis::CappedCollection data structure
                         # (on Redis server) look at the
                         # "CappedCollection data structure" section.
-        );
+    );
 
 Requirements for arguments C<name>, C<size>, are described in more detail
 in the sections relating to the methods L</name>, L</size> .
@@ -2049,12 +1559,269 @@ The following examples illustrate other uses of the C<new> method:
 
 An error will cause the program to halt (C<confess>) if an argument is not valid.
 
+=cut
+around BUILDARGS => sub {
+    my $orig  = shift;
+    my $class = shift;
+
+    if ( _INSTANCE( $_[0], 'Redis' ) ) {
+        my $redis = shift;
+        return $class->$orig(
+            # have to look into the Redis object ...
+            redis   => $redis->{server},
+            _redis  => $redis,
+            @_
+        );
+    } elsif ( _INSTANCE( $_[0], 'Test::RedisServer' ) ) {
+        # to test only
+        my $redis = shift;
+        return $class->$orig(
+            # have to look into the Test::RedisServer object ...
+            redis   => '127.0.0.1:'.$redis->conf->{port},
+            @_
+        );
+    } elsif ( _INSTANCE( $_[0], __PACKAGE__ ) ) {
+        my $coll = shift;
+        return $class->$orig(
+            redis   => $coll->_server,
+            _redis  => $coll->_redis,
+            @_
+        );
+    } else {
+        return $class->$orig( @_ );
+    }
+};
+
+sub BUILD {
+    my $self = shift;
+
+    $self->_redis( $self->_redis_constructor )
+        unless ( $self->_redis );
+
+    my ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
+    defined( _NONNEGINT( $maxmemory ) )
+        or $self->_throw( ENETWORK );
+
+    my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
+    if ( $major < 2 || ( $major == 2 && $minor <= 4 ) ) {
+        $self->_set_last_errorcode( EREDIS );
+        confess "Need a Redis server version 2.6 or higher";
+    }
+
+    $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
+    if ( $self->_maxmemory_policy =~ /^all/ ) {
+        $self->_throw( EMAXMEMORYPOLICY );
+    }
+
+    $self->_maxmemory( $maxmemory );
+    $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
+        if $self->_maxmemory;
+
+    $self->_set_size( int( $maxmemory / $REDIS_MEMORY_OVERHEAD ) )
+        if !$self->size && $maxmemory;
+    confess 'The maximum size of the data may exceed available memory'
+        if ( $maxmemory && $self->size * $REDIS_MEMORY_OVERHEAD > $maxmemory );
+
+    $self->_queue_key(  NAMESPACE.':queue:'.$self->name );
+    $self->_status_key( NAMESPACE.':status:'.$self->name );
+    $self->_info_keys(  NAMESPACE.':I:'.$self->name );
+    $self->_data_keys(  NAMESPACE.':D:'.$self->name );
+    $self->_time_keys(  NAMESPACE.':T:'.$self->name );
+
+    $self->_verify_collection;
+}
+
+#-- public attributes ----------------------------------------------------------
+
 =head2 METHODS
 
 An error will cause the program to halt (C<confess>) if an argument is not valid.
 
 ATTENTION: In the L<Redis|Redis> module the synchronous commands throw an
 exception on receipt of an error reply, or return a non-error reply directly.
+
+=cut
+
+=head3 C<name>
+
+The method of access to the C<name> attribute (collection ID).
+The method returns the current value of the attribute.
+The C<name> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+If the value of C<name> is not specified to the L<constructor|/CONSTRUCTOR>,
+it creates a new collection ID as UUID.
+
+=cut
+has 'name'                  => (
+    is          => 'ro',
+    clearer     => '_clear_name',
+    isa         => __PACKAGE__.'::NonEmptNameStr',
+    default     => sub { return $uuid->create_str },
+);
+
+=head3 C<size>
+
+The method of access to the C<size> attribute - the maximum size, in bytes,
+of the capped collection data (Default 0 - no limit).
+
+The method returns the current value of the attribute.
+The C<size> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+Is set for the new collection. Otherwise an error will cause the program to halt
+(C<confess>) if the value is not equal to the value that was used when
+a collection was created.
+
+=cut
+has 'size'                  => (
+    reader      => 'size',
+    writer      => '_set_size',
+    clearer     => '_clear_size',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+);
+
+=head3 C<advance_cleanup_bytes>
+
+The method of access to the C<advance_cleanup_bytes> attribute - the minimum size,
+in bytes, of the data to be released, if the size of the collection data
+after adding new data may exceed L</size>. Default 0 - additional data
+should not be released.
+
+The C<advance_cleanup_bytes> attribute is designed to reduce the release of memory
+operations with frequent data changes.
+
+The C<advance_cleanup_bytes> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The method returns and sets the current value of the attribute.
+
+The C<advance_cleanup_bytes> value may be less than or equal to L</size>. Otherwise
+an error will cause the program to halt (C<confess>).
+
+=cut
+has 'advance_cleanup_bytes' => (
+    is          => 'rw',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+    trigger     => sub {
+        my $self = shift;
+        !$self->size || ( $self->advance_cleanup_bytes <= $self->size || $self->_throw( EMISMATCHARG, 'advance_cleanup_bytes' ) );
+    },
+);
+
+=head3 C<advance_cleanup_num>
+
+The method of access to the C<advance_cleanup_num> attribute - maximum number
+of data elements to delete, if the size of the collection data after adding
+new data may exceed C<size>. Default 0 - the number of times the deleted data
+is not limited.
+
+The C<advance_cleanup_num> attribute is designed to reduce the number of
+deletes data.
+
+The C<advance_cleanup_num> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The method returns and sets the current value of the attribute.
+
+=cut
+has 'advance_cleanup_num'   => (
+    is          => 'rw',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+);
+
+=head3 C<max_datasize>
+
+The method of access to the C<max_datasize> attribute.
+
+The method returns the current value of the attribute if called without arguments.
+
+Non-negative integer value can be used to specify a new value to
+the maximum size of the data introduced into the collection
+(methods L</insert> and L</update>).
+
+The C<max_datasize> attribute value is used in the L<constructor|/CONSTRUCTOR>
+and operations data entry on the Redis server.
+
+The L<constructor|/CONSTRUCTOR> uses the smaller of the values of 512MB and
+C<maxmemory> limit from a F<redis.conf> file.
+
+=cut
+has 'max_datasize'          => (
+    is          => 'rw',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => MAX_DATASIZE,
+    lazy        => 1,
+    trigger     => sub {
+        my $self = shift;
+        if ( $self->_redis ) {
+            $self->max_datasize <= ( $self->_maxmemory ? min( $self->_maxmemory, MAX_DATASIZE ) : MAX_DATASIZE )
+                || $self->_throw( EMISMATCHARG, 'max_datasize' );
+        }
+    },
+);
+
+=head3 C<older_allowed>
+
+The method of access to the C<older_allowed> attribute -
+permission to add data with time less than the data time which was
+deleted from the data list. Default 0 - insert too old data is prohibited.
+
+The method returns the current value of the attribute.
+The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+=cut
+has 'older_allowed'         => (
+    is          => 'ro',
+    isa         => 'Bool',
+    default     => 1,
+);
+
+=head3 C<big_data_threshold>
+
+The method of access to the C<big_data_threshold> attribute - determines the maximum
+data size to store in an optimzed format.  Data stored in this way will use less memory
+but require additional processing to access.
+Default 0 - storage are separate hashes and ordered lists.
+
+Can be used to save memory.
+It makes sense to use on small lists of data.
+Leads to a decrease in performance when using large lists of data.
+
+The method returns the current value of the attribute.
+The C<big_data_threshold> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+To see a description of the used C<Redis::CappedCollection> data structure
+(on Redis server) look at the L</CappedCollection data structure> section.
+
+The effective value of C<big_data_threshold> depends on the conditions the collection:
+the item size and length of lists, the size of data identifiers, etc.
+
+The effective value of C<big_data_threshold> can be controlled with server settings
+(C<hahs-max-ziplist-entries>, C<hash-max-ziplist-value>,
+C<zset-max-ziplist-entries>, C<zset-max-ziplist-value>)
+in the F<redis.conf> file.
+
+=cut
+has 'big_data_threshold'    => (
+    is          => 'ro',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
+);
+
+=head3 C<last_errorcode>
+
+The method of access to the code of the last identified errors.
+
+To see more description of the identified errors look at the L</DIAGNOSTICS>
+section.
+
+=cut
+has 'last_errorcode'        => (
+    reader      => 'last_errorcode',
+    writer      => '_set_last_errorcode',
+    isa         => 'Int',
+    default     => 0,
+);
+
+#-- public methods -------------------------------------------------------------
 
 =head3 C<insert( $data, $list_id, $data_id, $data_time )>
 
@@ -2103,6 +1870,51 @@ your adding the data and the data ID corresponding to your data.
     # or
     ( $list_id, $data_id ) = $coll->insert( 'Some data stuff' );
 
+=cut
+sub insert {
+    my $self        = shift;
+    my $data        = shift;
+    my $list_id     = shift // $uuid->create_str;
+    my $data_id     = shift // '';
+    my $data_time   = shift // time;
+
+    $data                                                   // $self->_throw( EMISMATCHARG, 'data' );
+    ( defined( _STRING( $data ) ) || $data eq '' )          || $self->_throw( EMISMATCHARG, 'data' );
+    _STRING( $list_id )                                     // $self->_throw( EMISMATCHARG, 'list_id' );
+    $list_id !~ /:/                                         || $self->_throw( EMISMATCHARG, 'list_id' );
+    ( defined( _STRING( $data_id ) ) || $data_id eq '' )    || $self->_throw( EMISMATCHARG, 'data_id' );
+    ( defined( _NUMBER( $data_time ) ) && $data_time > 0 )  || $self->_throw( EMISMATCHARG, 'data_time' );
+
+    my $data_len = bytes::length( $data );
+    $self->size && ( ( $data_len <= $self->size )           || $self->_throw( EMISMATCHARG, 'data' ) );
+    ( $data_len <= $self->max_datasize )                    || $self->_throw( EDATATOOLARGE );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my ( $error, $status_exist, $result_data_id ) = $self->_call_redis(
+        $self->_lua_script_cmd( 'insert' ),
+        0,
+        $self->name,
+        $self->size,
+        $self->advance_cleanup_bytes,
+        $self->advance_cleanup_num,
+        $self->big_data_threshold,
+        $list_id,
+        $data_id,
+        $data,
+        $data_time,
+    );
+
+    if ( $error ) { $self->_throw( $error ); }
+
+    unless ( $status_exist ) {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return wantarray ? ( $list_id, $result_data_id ) : $list_id;
+}
+
 =head3 C<update( $list_id, $data_id, $data )>
 
 Updates the data in the queue identified by the first argument.
@@ -2117,17 +1929,50 @@ through the method L</max_datasize>.
 
 The following examples illustrate uses of the C<update> method:
 
-    if ( $coll->update( $list_id, 0, 'Some new data stuff' ) )
-    {
-        print "Data updated successfully\n";
-    }
-    else
-    {
-        print "The data is not updated\n";
+    if ( $coll->update( $list_id, 0, 'Some new data stuff' ) ) {
+        say "Data updated successfully";
+    } else {
+        say "The data is not updated";
     }
 
 Method returns true if the data is updated or false if the queue with
 the given ID does not exist or is used an invalid data ID.
+
+=cut
+sub update {
+    my ( $self, $list_id, $data_id, $data ) = @_;
+
+    _STRING( $list_id )                             // $self->_throw( EMISMATCHARG, 'list_id' );
+    defined( _STRING( $data_id ) )                  || $self->_throw( EMISMATCHARG, 'data_id' );
+    $data                                           // $self->_throw( EMISMATCHARG, 'data' );
+    ( defined( _STRING( $data ) ) || $data eq '' )  || $self->_throw( EMISMATCHARG, 'data' );
+
+    my $data_len = bytes::length( $data );
+    $self->size && ( ( $data_len <= $self->size )   || $self->_throw( EMISMATCHARG, 'data' ) );
+    ( $data_len <= $self->max_datasize )            || $self->_throw( EDATATOOLARGE );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my ( $status_exist, $ret ) = $self->_call_redis(
+        $self->_lua_script_cmd( 'update' ),
+        0,
+        $self->name,
+        $self->size,
+        $self->advance_cleanup_bytes,
+        $self->advance_cleanup_num,
+        $self->big_data_threshold,
+        $list_id,
+        $data_id,
+        $data,
+    );
+
+    unless ( $status_exist ) {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return $ret;
+}
 
 =head3 C<receive( $list_id, $data_id )>
 
@@ -2169,13 +2014,57 @@ C<$data_id> must be a normal string.
 The following examples illustrate uses of the C<receive> method:
 
     my @data = $coll->receive( $list_id );
-    print "List '$list_id' has '$_'\n" foreach @data;
+    say "List '$list_id' has '$_'" foreach @data;
     # or
     my $list_len = $coll->receive( $list_id );
-    print "List '$list_id' has '$list_len' item(s)\n";
+    say "List '$list_id' has '$list_len' item(s)";
     # or
     my $data = $coll->receive( $list_id, 0 );
-    print "List '$list_id' has '$data' in 'zero' position\n";
+    say "List '$list_id' has '$data' in 'zero' position";
+
+=cut
+sub receive {
+    my ( $self, $list_id, $data_id ) = @_;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    if ( defined( $data_id ) && $data_id ne '' ) {
+        _STRING( $data_id ) // $self->_throw( EMISMATCHARG, 'data_id' );
+        return $self->_call_redis(
+            $self->_lua_script_cmd( 'receive' ),
+            0,
+            $self->name,
+            $self->big_data_threshold,
+            $list_id,
+            'val',
+            $data_id,
+        );
+    } else {
+        if ( wantarray ) {
+            return $self->_call_redis(
+                $self->_lua_script_cmd( 'receive' ),
+                0,
+                $self->name,
+                $self->big_data_threshold,
+                $list_id,
+                defined( $data_id ) ? 'all' : 'vals',
+                '',
+            );
+        } else {
+            return $self->_call_redis(
+                $self->_lua_script_cmd( 'receive' ),
+                0,
+                $self->name,
+                $self->big_data_threshold,
+                $list_id,
+                'len',
+                '',
+            );
+        }
+    }
+}
 
 =head3 C<pop_oldest>
 
@@ -2193,10 +2082,39 @@ Method returns an empty list if the collection does not contain any data.
 
 The following examples illustrate uses of the C<pop_oldest> method:
 
-    while ( my ( $list_id, $data ) = $coll->pop_oldest )
-    {
-        print "List '$list_id' had '$data'\n";
+    while ( my ( $list_id, $data ) = $coll->pop_oldest ) {
+        say "List '$list_id' had '$data'";
     }
+
+=cut
+sub pop_oldest {
+    my ( $self ) = @_;
+
+    my @ret;
+    $self->_set_last_errorcode( ENOERROR );
+
+    my ( $queue_exist, $status_exist, $excess_list_exist, $excess_id, $excess_data ) =
+        $self->_call_redis(
+            $self->_lua_script_cmd( 'pop_oldest' ),
+            0,
+            $self->name,
+            $self->big_data_threshold,
+        );
+
+    if ( $queue_exist ) {
+        unless ( $status_exist ) {
+            $self->_clear_sha1;
+            $self->_throw( ECOLLDELETED );
+        }
+        unless ( $excess_list_exist ) {
+            $self->_clear_sha1;
+            $self->_throw( EMAXMEMORYPOLICY );
+        }
+        @ret = ( $excess_id, $excess_data );
+    }
+
+    return @ret;
+}
 
 =head3 C<collection_info>
 
@@ -2229,9 +2147,34 @@ C<undef> if the collection does not contain data.
 The following examples illustrate uses of the C<collection_info> method:
 
     my $info = $coll->collection_info;
-    print 'An existing collection uses ', $info->{length}, ' byte of data, ',
+    say 'An existing collection uses ', $info->{length}, ' byte of data, ',
         'in ', $info->{items}, ' items are placed in ',
-        $info->{lists}, ' lists', "\n";
+        $info->{lists}, ' lists';
+
+=cut
+sub collection_info {
+    my $self        = shift;
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my @ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'collection_info' ),
+        0,
+        $self->name,
+    );
+
+    unless ( shift @ret ) {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return {
+        length      => $ret[0],
+        lists       => $ret[1],
+        items       => $ret[2],
+        oldest_time => $ret[3] ? $ret[3] + 0 : $ret[3],
+    };
+}
 
 =head3 C<info( $list_id )>
 
@@ -2260,6 +2203,34 @@ C<undef> if the data list does not exists.
 
 =back
 
+=cut
+sub info {
+    my ( $self, $list_id ) = @_;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my @ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'info' ),
+        0,
+        $self->name,
+        $self->big_data_threshold,
+        $list_id,
+    );
+
+    unless ( shift @ret ) {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return {
+        items               => $ret[0],
+        oldest_time         => $ret[1] ? $ret[1] + 0 : $ret[1],
+        last_removed_time   => $ret[2] ? $ret[2] + 0 : $ret[2],
+    };
+}
+
 =head3 C<exists( $list_id )>
 
 The method is designed to test whether there is a list in the collection with
@@ -2268,7 +2239,18 @@ Returns true if the list exists and false otherwise.
 
 The following examples illustrate uses of the C<exists> method:
 
-    print "The collection has '$list_id' list\n" if $coll->exists( 'Some_id' );
+    say "The collection has '$list_id' list" if $coll->exists( 'Some_id' );
+
+=cut
+sub exists {
+    my ( $self, $list_id ) = @_;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
+}
 
 =head3 C<lists( $pattern )>
 
@@ -2298,7 +2280,7 @@ Use C<'\'> to escape special characters if you want to match them verbatim.
 
 The following examples illustrate uses of the C<lists> method:
 
-    print "The collection has '$_' list\n" foreach $coll->lists;
+    say "The collection has '$_' list" foreach $coll->lists;
 
 Warning: consider C<lists> as a command that should only be used in production
 environments with extreme care. It may ruin performance when it is executed
@@ -2309,6 +2291,18 @@ Don't use C<lists> in your regular application code.
 Methods C<lists> can cause an exception (C<confess>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
+
+=cut
+sub lists {
+    my $self        = shift;
+    my $pattern     = shift // '*';
+
+    _STRING( $pattern ) // $self->_throw( EMISMATCHARG, 'pattern' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
+}
 
 =head3 C<drop_collection>
 
@@ -2333,6 +2327,25 @@ Methods C<drop_collection> can cause an exception (C<confess>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
 
+=cut
+sub drop_collection {
+    my ( $self ) = @_;
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my $ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'drop_collection' ),
+        0,
+        $self->name,
+    );
+
+    $self->_clear_name;
+    $self->_clear_size;
+    $self->_clear_sha1;
+
+    return $ret;
+}
+
 =head3 C<drop( $list_id )>
 
 Use the C<drop> method to remove the entire specified list.
@@ -2342,6 +2355,30 @@ the specified list.
 C<$list_id> must be a non-empty string.
 
 Method returns true if the list is removed, or false otherwise.
+
+=cut
+sub drop {
+    my ( $self, $list_id ) = @_;
+
+    _STRING( $list_id ) // $self->_throw( EMISMATCHARG, 'list_id' );
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my ( $status_exist, $ret ) = $self->_call_redis(
+        $self->_lua_script_cmd( 'drop' ),
+        0,
+        $self->name,
+        $self->big_data_threshold,
+        $list_id,
+    );
+
+    unless ( $status_exist ) {
+        $self->_clear_sha1;
+        $self->_throw( ECOLLDELETED );
+    }
+
+    return $ret;
+}
 
 =head3 C<ping>
 
@@ -2353,6 +2390,22 @@ The following examples illustrate uses of the C<ping> method:
 
     $is_alive = $coll->ping;
 
+=cut
+sub ping {
+    my ( $self ) = @_;
+
+    $self->_set_last_errorcode( ENOERROR );
+
+    my $ret;
+    try {
+        $ret = $self->_redis->ping;
+    } catch {
+        $self->_redis_exception( $_ );
+    };
+
+    return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
+}
+
 =head3 C<quit>
 
 Ask the Redis server to close the connection.
@@ -2361,161 +2414,197 @@ The following examples illustrate uses of the C<quit> method:
 
     $coll->quit;
 
-=head3 C<name>
+=cut
+sub quit {
+    my ( $self ) = @_;
 
-The method of access to the C<name> attribute (collection ID).
-The method returns the current value of the attribute.
-The C<name> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+    $self->_set_last_errorcode( ENOERROR );
+    $self->_clear_sha1;
+    try {
+        $self->_redis->quit;
+    } catch {
+        $self->_redis_exception( $_ );
+    };
+}
 
-If the value of C<name> is not specified to the L<constructor|/CONSTRUCTOR>,
-it creates a new collection ID as UUID.
+#-- private attributes ---------------------------------------------------------
 
-=head3 C<size>
+has '_server'               => (
+    is          => 'rw',
+    init_arg    => 'redis',
+    isa         => 'Str',
+    default     => DEFAULT_SERVER.':'.DEFAULT_PORT,
+    trigger     => sub {
+        my $self = shift;
+        $self->_server( $self->_server.':'.DEFAULT_PORT )
+            unless $self->_server =~ /:/;
+    },
+);
 
-The method of access to the C<size> attribute - the maximum size, in bytes,
-of the capped collection data (Default 0 - no limit).
+has '_redis'                => (
+    is          => 'rw',
+    # 'Maybe[Test::RedisServer]' to test only
+    isa         => 'Maybe[Redis] | Maybe[Test::RedisServer]',
+);
 
-The method returns the current value of the attribute.
-The C<size> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+has '_maxmemory'            => (
+    is          => 'rw',
+    isa         => __PACKAGE__.'::NonNegInt',
+    init_arg    => undef,
+);
 
-Is set for the new collection. Otherwise an error will cause the program to halt
-(C<confess>) if the value is not equal to the value that was used when
-a collection was created.
+foreach my $attr_name ( qw(
+        _maxmemory_policy
+        _queue_key
+        _status_key
+        _info_keys
+        _data_keys
+        _time_keys
+    ) ) {
+    has $attr_name          => (
+        is          => 'rw',
+        isa         => 'Str',
+        init_arg    => undef,
+    );
+}
 
-=head3 C<advance_cleanup_bytes>
+has '_lua_scripts'          => (
+    is          => 'ro',
+    isa         => 'HashRef[Str]',
+    lazy        => 1,
+    init_arg    => undef,
+    builder     => sub { return {}; },
+);
 
-The method of access to the C<advance_cleanup_bytes> attribute - the minimum size,
-in bytes, of the data to be released, if the size of the collection data
-after adding new data may exceed L</size>. Default 0 - additional data
-should not be released.
+#-- private methods ------------------------------------------------------------
 
-The C<advance_cleanup_bytes> attribute is designed to reduce the release of memory
-operations with frequent data changes.
+sub _lua_script_cmd {
+    my ( $self, $name ) = @_;
 
-The C<advance_cleanup_bytes> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
-The method returns and sets the current value of the attribute.
+    my $sha1 = $self->_lua_scripts->{ $name };
+    unless ( $sha1 ) {
+        $sha1 = $self->_lua_scripts->{ $name } = sha1_hex( $lua_script_body{ $name } );
+        unless ( ( $self->_call_redis( 'SCRIPT', 'EXISTS', $sha1 ) )[0] ) {
+            return( 'EVAL', $lua_script_body{ $name } );
+        }
+    }
+    return( 'EVALSHA', $sha1 );
+}
 
-The C<advance_cleanup_bytes> value may be less than or equal to L</size>. Otherwise
-an error will cause the program to halt (C<confess>).
+sub _data_list_key {
+    my ( $self, $list_id ) = @_;
 
-=head3 C<advance_cleanup_num>
+    return( $self->_data_keys.':'.$list_id );
+}
 
-The method of access to the C<advance_cleanup_num> attribute - maximum number
-of data elements to delete, if the size of the collection data after adding
-new data may exceed C<size>. Default 0 - the number of times the deleted data
-is not limited.
+sub _verify_collection {
+    my ( $self ) = @_;
 
-The C<advance_cleanup_num> attribute is designed to reduce the number of
-deletes data.
+    $self->_set_last_errorcode( ENOERROR );
 
-The C<advance_cleanup_num> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
-The method returns and sets the current value of the attribute.
+    my ( $status_exist, $size, $older_allowed, $big_data_threshold ) = $self->_call_redis(
+        $self->_lua_script_cmd( 'verify_collection' ),
+        0,
+        $self->name,
+        $self->size || 0,
+        $self->older_allowed ? 1 : 0,
+        $self->big_data_threshold || 0,
+        );
 
-=head3 C<max_datasize>
+    if ( $status_exist ) {
+        $self->_set_size( $size ) unless $self->size;
+        $size               == $self->size               or $self->_throw( EMISMATCHARG, 'size' );
+        $older_allowed      == $self->older_allowed      or $self->_throw( EMISMATCHARG, 'older_allowed' );
+        $big_data_threshold == $self->big_data_threshold or $self->_throw( EMISMATCHARG, 'big_data_threshold' );
+    }
+}
 
-The method of access to the C<max_datasize> attribute.
+sub _throw {
+    my ( $self, $err, $prefix ) = @_;
 
-The method returns the current value of the attribute if called without arguments.
+    $self->_set_last_errorcode( $err );
+    confess( ( $prefix ? "$prefix : " : '' ).$ERROR[ $err ] );
+}
 
-Non-negative integer value can be used to specify a new value to
-the maximum size of the data introduced into the collection
-(methods L</insert> and L</update>).
+sub _redis_exception {
+    my ( $self, $error ) = @_;
 
-The C<max_datasize> attribute value is used in the L<constructor|/CONSTRUCTOR>
-and operations data entry on the Redis server.
+    # Use the error messages from Redis.pm
+    if (
+               $error =~ /^Could not connect to Redis server at /
+            || $error =~ /^Can't close socket: /
+            || $error =~ /^Not connected to any server/
+            # Maybe for pub/sub only
+            || $error =~ /^Error while reading from Redis server: /
+            || $error =~ /^Redis server closed connection/
+        ) {
+        $self->_set_last_errorcode( ENETWORK );
+    } elsif (
+               $error =~ /[\S+\s?]ERR command not allowed when used memory > 'maxmemory'/
+            || $error =~ /[\S+\s?]OOM command not allowed when used memory > 'maxmemory'/
+            || $error =~ /\[EVALSHA\] NOSCRIPT No matching script. Please use EVAL./
+        ) {
+        $self->_set_last_errorcode( EMAXMEMORYLIMIT );
+        $self->_clear_sha1;
+    } else {
+        $self->_set_last_errorcode( EREDIS );
+    }
 
-The L<constructor|/CONSTRUCTOR> uses the smaller of the values of 512MB and
-C<maxmemory> limit from a F<redis.conf> file.
+    die $error;
+}
 
-=head3 C<older_allowed>
+sub _clear_sha1 {
+    my ( $self ) = @_;
 
-The method of access to the C<older_allowed> attribute -
-permission to add data with time less than the data time which was
-deleted from the data list. Default 0 - insert too old data is prohibited.
+    delete @{$self->_lua_scripts}{ keys %{$self->_lua_scripts} };
+}
 
-The method returns the current value of the attribute.
-The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+sub _redis_constructor {
+    my ( $self ) = @_;
 
-=head3 C<big_data_threshold>
+    $self->_set_last_errorcode( ENOERROR );
+    my $redis;
+    try {
+        $redis = Redis->new(
+            server      => $self->_server,
+            #encoding    => undef,
+        )
+    } catch {
+        $self->_redis_exception( $_ );
+    };
 
-The method of access to the C<big_data_threshold> attribute - determines the maximum
-data size to store in an optimzed format.  Data stored in this way will use less memory
-but require additional processing to access.
-Default 0 - storage are separate hashes and ordered lists.
+    return $redis;
+}
 
-Can be used to save memory.
-It makes sense to use on small lists of data.
-Leads to a decrease in performance when using large lists of data.
+# Keep in mind the default 'redis.conf' values:
+# Close the connection after a client is idle for N seconds (0 to disable)
+#    timeout 300
 
-The method returns the current value of the attribute.
-The C<big_data_threshold> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+# Send a request to Redis
+sub _call_redis {
+    my $self        = shift;
+    my $method      = shift;
 
-To see a description of the used C<Redis::CappedCollection> data structure
-(on Redis server) look at the L</CappedCollection data structure> section.
+    $self->_set_last_errorcode( ENOERROR );
 
-The effective value of C<big_data_threshold> depends on the conditions the collection:
-the item size and length of lists, the size of data identifiers, etc.
+    my @return;
+    my @args = @_;
+    try {
+        @return = $self->_redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
+    } catch {
+        $self->_redis_exception( $_ );
+    };
 
-The effective value of C<big_data_threshold> can be controlled with server settings
-(C<hahs-max-ziplist-entries>, C<hash-max-ziplist-value>,
-C<zset-max-ziplist-entries>, C<zset-max-ziplist-value>)
-in the F<redis.conf> file.
+    return wantarray ? @return : $return[0];
+}
 
-=head3 C<last_errorcode>
+#-- Closes and cleans up -------------------------------------------------------
 
-The method of access to the code of the last identified errors.
+no Mouse::Util::TypeConstraints;
+no Mouse;                                       # keywords are removed from the package
+__PACKAGE__->meta->make_immutable();
 
-To see more description of the identified errors look at the L</DIAGNOSTICS>
-section.
-
-=head2 EXPORT
-
-None by default.
-
-Additional constants are available for import, which can be used
-to define some type of parameters.
-
-These are the defaults:
-
-=over
-
-=item C<DEFAULT_SERVER>
-
-Default Redis local server - C<'localhost'>.
-
-=item C<DEFAULT_PORT>
-
-Default Redis server port - 6379.
-
-=item C<NAMESPACE>
-
-Namespace name used keys on the Redis server - C<'Capped'>.
-
-=back
-
-=head2 GLOBAL VARIABLES
-
-=over
-
-=item C<$REDIS_MEMORY_OVERHEAD>
-
-In addition to user-supplied data, Redis uses memory for its metadata
-and bookkeeping.
-This overhead may cause significantly higher (e.g. 10x) memory usage than actual
-amount of your data stored in collection.
-$REDIS_MEMORY_OVERHEAD is a rough estimate of additional memory usage.
-Collection multiplies its size by $REDIS_MEMORY_OVERHEAD to estimate how much
-memory it will use in Redis.
-Actual usage depends on data item size, average list size and other factors,
-so default estimate may not work in your case.
-Adjust $REDIS_MEMORY_OVERHEAD according to your application needs; this may
-require some experiments to get a good estimate.
-
-By default, the following value is used:
-
-    our $REDIS_MEMORY_OVERHEAD = 3; # 3 times more than actual data
-
-=back
+__END__
 
 =head2 DIAGNOSTICS
 
@@ -2548,59 +2637,13 @@ Piece of code wrapped in C<eval {...};> and analyze L</last_errorcode>
 
 =back
 
-In L</last_errortsode> recognizes the following:
-
-=over 3
-
-=item C<ENOERROR>
-
-No error.
-
-=item C<EMISMATCHARG>
-
-This means that you didn't give the right argument to a C<new>
-or to other L<method|/METHODS>.
-
-=item C<EDATATOOLARGE>
-
-This means that the data is too large.
-
-=item C<ENETWORK>
-
-This means that an error in connection to Redis server was detected.
-
-=item C<EMAXMEMORYLIMIT>
-
-This means that the command is not allowed when used memory > C<maxmemory>
-in the F<redis.conf> file.
-
-=item C<EMAXMEMORYPOLICY>
-
-This means that you are using the C<maxmemory-police all*> in the F<redis.conf> file.
-
-=item C<ECOLLDELETED>
-
-This means that the system part of the collection was removed prior to use.
-
-=item C<EREDIS>
-
-This means that other Redis error message detected.
-
-=item C<EDATAIDEXISTS>
-
-This means that you are trying to insert data with an ID that is already in
-the data list.
-
-=item C<EOLDERTHANALLOWED>
-
-This means that you are trying to insert the data with the time less than
-the time of the data that has been deleted from the data list.
-
-=back
-
 =head2 An Example
 
 The example shows a possible treatment for possible errors.
+
+    use 5.010;
+    use strict;
+    use warnings;
 
     #-- Common ---------------------------------------------------------
     use Redis::CappedCollection qw(
@@ -2615,7 +2658,7 @@ The example shows a possible treatment for possible errors.
         EMAXMEMORYPOLICY
         ECOLLDELETED
         EREDIS
-        );
+    );
 
     # A possible treatment for possible errors
     sub exception {
@@ -2623,56 +2666,35 @@ The example shows a possible treatment for possible errors.
         my $err     = shift;
 
         die $err unless $coll;
-        if ( $coll->last_errorcode == ENOERROR )
-        {
+        if ( $coll->last_errorcode == ENOERROR ) {
             # For example, to ignore
             return unless $err;
-        }
-        elsif ( $coll->last_errorcode == EMISMATCHARG )
-        {
+        } elsif ( $coll->last_errorcode == EMISMATCHARG ) {
             # Necessary to correct the code
-        }
-        elsif ( $coll->last_errorcode == EDATATOOLARGE )
-        {
+        } elsif ( $coll->last_errorcode == EDATATOOLARGE ) {
             # You must use the control data length
-        }
-        elsif ( $coll->last_errorcode == ENETWORK )
-        {
+        } elsif ( $coll->last_errorcode == ENETWORK ) {
             # For example, sleep
             #sleep 60;
             # and return code to repeat the operation
             #return 'to repeat';
-        }
-        elsif ( $coll->last_errorcode == EMAXMEMORYLIMIT )
-        {
+        } elsif ( $coll->last_errorcode == EMAXMEMORYLIMIT ) {
             # For example, return code to restart the server
             #return 'to restart the redis server';
-        }
-        elsif ( $coll->last_errorcode == EMAXMEMORYPOLICY )
-        {
+        } elsif ( $coll->last_errorcode == EMAXMEMORYPOLICY ) {
             # For example, return code to reinsert the data
             #return "to reinsert look at $err";
-        }
-        elsif ( $coll->last_errorcode == ECOLLDELETED )
-        {
+        } elsif ( $coll->last_errorcode == ECOLLDELETED ) {
             # For example, return code to ignore
             #return "to ignore $err";
-        }
-        elsif ( $coll->last_errorcode == EREDIS )
-        {
+        } elsif ( $coll->last_errorcode == EREDIS ) {
             # Independently analyze the $err
-        }
-        elsif ( $coll->last_errorcode == EDATAIDEXISTS )
-        {
+        } elsif ( $coll->last_errorcode == EDATAIDEXISTS ) {
             # For example, return code to reinsert the data
             #return "to reinsert with new data ID";
-        }
-        elsif ( $coll->last_errorcode == EOLDERTHANALLOWED )
-        {
+        } elsif ( $coll->last_errorcode == EOLDERTHANALLOWED ) {
             # Independently analyze the situation
-        }
-        else
-        {
+        } else {
             # Unknown error code
         }
         die $err if $err;
@@ -2685,11 +2707,11 @@ The example shows a possible treatment for possible errors.
             redis   => DEFAULT_SERVER.':'.DEFAULT_PORT,
             name    => 'Some name',
             size    => 100_000,
-            );
+        );
     };
     exception( $coll, $@ ) if $@;
-    print "'", $coll->name, "' collection created.\n";
-    print 'Restrictions: ', $coll->size, ' size, "\n";
+    say "'", $coll->name, "' collection created.";
+    say 'Restrictions: ', $coll->size, ' size;
 
     #-- Producer -------------------------------------------------------
     #-- New data
@@ -2699,17 +2721,14 @@ The example shows a possible treatment for possible errors.
             'Some data stuff',
             'Some_id',      # If not specified, it creates
                             # a new items list named as UUID
-            );
-        print "Added data in a list with '", $list_id, "' id\n" );
+        );
+        say "Added data in a list with '", $list_id, "' id" );
 
         # Change the "zero" element of the list with the ID $list_id
-        if ( $coll->update( $list_id, 0, 'Some new data stuff' ) )
-        {
-            print "Data updated successfully\n";
-        }
-        else
-        {
-            print "The data is not updated\n";
+        if ( $coll->update( $list_id, 0, 'Some new data stuff' ) ) {
+            say 'Data updated successfully';
+        } else {
+            say 'The data is not updated';
         }
     };
     exception( $coll, $@ ) if $@;
@@ -2719,11 +2738,10 @@ The example shows a possible treatment for possible errors.
 
     eval {
         @data = $coll->receive( $list_id );
-        print "List '$list_id' has '$_'\n" foreach @data;
+        say "List '$list_id' has '$_'" foreach @data;
         # or to obtain the data in the order they are received
-        while ( my ( $list_id, $data ) = $coll->pop_oldest )
-        {
-            print "List '$list_id' had '$data'\n";
+        while ( my ( $list_id, $data ) = $coll->pop_oldest ) {
+            say "List '$list_id' had '$data'";
         }
     };
     exception( $coll, $@ ) if $@;
@@ -2733,12 +2751,12 @@ The example shows a possible treatment for possible errors.
 
     my ( $length, $lists, $items );
     eval {
-    my $info = $coll->collection_info;
-    print 'An existing collection uses ', $info->{length}, ' byte of data, ',
-        'in ', $info->{items}, ' items are placed in ',
-        $info->{lists}, ' lists', "\n";
+        my $info = $coll->collection_info;
+        say 'An existing collection uses ', $info->{length}, ' byte of data, ',
+            'in ', $info->{items}, ' items are placed in ',
+            $info->{lists}, ' lists';
 
-        print "The collection has '$list_id' list\n"
+        say "The collection has '$list_id' list"
             if $coll->exists( 'Some_id' );
     };
     exception( $coll, $@ ) if $@;
