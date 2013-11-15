@@ -60,8 +60,8 @@ if ( !$real_redis )
     }
 }
 my $skip_msg;
-$skip_msg = "Redis server is unavailable" unless ( !$@ and $real_redis and $real_redis->ping );
-$skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg and !eval { return $real_redis->eval( 'return 1', 0 ) } );
+$skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
+$skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
 
 SKIP: {
     diag $skip_msg if $skip_msg;

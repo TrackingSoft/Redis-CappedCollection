@@ -132,7 +132,6 @@ $coll->quit;
 
 my $redis2 = Redis->new(
     server => $redis_addr,
-    encoding => undef,
     );
 
 $coll = Redis::CappedCollection->new(
@@ -142,17 +141,12 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-is $coll->_redis->{encoding}, undef, 'encoding not exists';
-
 $coll = Redis::CappedCollection->new(
     redis => $redis_addr,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
-
-#is $coll->_redis->{encoding}, undef, 'encoding not exists';
-is $coll->_redis->{encoding}, 'utf8', 'encoding exists';
 
 $coll = Redis::CappedCollection->new(
     $coll,

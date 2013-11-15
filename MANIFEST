@@ -28,11 +28,12 @@ t/00_CappedCollection/17_advance_cleanup_num.t
 t/00_CappedCollection/18_info.t
 t/00_CappedCollection/19_drop.t
 t/99_usage/01_many_inserts.t
+xt/author/.perlcritic.rc
 xt/author/92_vars.t
-xt/author/93_versions.t
 xt/author/94_fixme.t
 xt/author/95_critic.t
-xt/release/96_kwalitee.t
+xt/release/95_kwalitee.t
+xt/release/96_kwalitee_extra.t
 xt/release/97_distribution.t
 xt/release/98_pod.t
 xt/release/99_pod_coverage.t

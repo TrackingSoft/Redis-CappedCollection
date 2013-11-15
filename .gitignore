@@ -6,3 +6,6 @@
 /benchmark_hash_used.sh
 /Makefile.old
 /Redis-*.tar.gz
+/CPANTS_Analyse.t
+/MYMETA.*
+

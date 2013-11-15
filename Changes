@@ -1,5 +1,10 @@
 Revision history for Redis::CappedCollection module
 
+0.11  Fri Nov  15 2013
+    CHANGES:
+    - Adjust Redis server connection parameters.
+      (Starting with version 1.963, Redis module doesn't support encoding)
+
 0.10  Fri Oct  25 2013
     FIXES:
     - Fix runtime loading of Test::*

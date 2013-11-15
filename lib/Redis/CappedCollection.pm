@@ -7,7 +7,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.10
+This documentation refers to C<Redis::CappedCollection> version 0.11
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 use Exporter qw(
     import
@@ -1489,15 +1489,19 @@ class or L<Redis|Redis> class, then the new object connection attribute values
 are taken from the object of the first argument. It does not create
 a new connection to the Redis server.
 
-Since L<Redis|Redis> knows nothing about encoding, it is forcing utf-8 flag
-on all data.
-If you want to store binary data in the C<Redis::CappedCollection> collection,
-you can disable this automatic encoding by passing an option to
-L<Redis|Redis> C<new>: C<encoding =E<gt> undef>.
+=over 3
 
-Standard encoding for the L<Redis|Redis> used, if C<new> invoked without
-the first argument being an object of C<Redis::JobQueue>
-class or L<Redis|Redis> class.
+=item *
+
+According to L<Redis|Redis> documentation:
+
+This module consider that any data sent to the Redis server is a raw octets string,
+even if it has utf8 flag set.
+And it doesn't do anything when getting data from the Redis server.
+
+UTF-8 data should be serialized before passing to C<Redis::CappedCollection> for storing in Redis.
+
+=back
 
 C<new> optionally takes arguments. These arguments are in key-value pairs.
 
@@ -2567,7 +2571,6 @@ sub _redis_constructor {
     try {
         $redis = Redis->new(
             server      => $self->_server,
-            #encoding    => undef,
         )
     } catch {
         $self->_redis_exception( $_ );

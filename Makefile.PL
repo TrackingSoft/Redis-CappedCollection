@@ -17,7 +17,7 @@ my %config = (
         'Digest::SHA1'          => 2.13,
         'Mouse'                 => 0.97,
         'Params::Util'          => 1.07,
-        'Redis'                 => 1.952,
+        'Redis'                 => 1.963,
         'Try::Tiny'             => 0.18,
         },
     BUILD_REQUIRES              => {
@@ -25,6 +25,21 @@ my %config = (
         'Test::Exception'       => 0.31,
         'Test::RedisServer'     => 0.04,
         },
+    META_MERGE          => {
+        no_index                => {
+            directory               => [
+#                't',
+#                'inc',
+                'xt',
+            ]
+        },
+        provides                => {
+            'Redis::CappedCollection'   => {
+                file                        => 'lib/Redis/CappedCollection.pm',
+                version                     => '0.11'
+            },
+        },
+    },
     ( $] >= 5.005 ?
         (
         ABSTRACT        => 'Redis::CappedCollection module provides the fixed sized collections that have a auto-FIFO age-out feature.',
@@ -34,7 +49,7 @@ my %config = (
     dist        => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean       => { FILES => "Debian_CPANTS.txt Redis-*.tar.gz" },
     LICENSE     => 'perl',
-    NO_MYMETA   => 1,
+#    NO_MYMETA   => 1,
 );
 
 my @patterns = qw( t/*.t t/*/*.t );
@@ -49,5 +64,7 @@ if( $ENV{RELEASE_TESTS} ) {
     @patterns = qw( xt/release/*.t xt/release/*/*.t );
     $config{test}->{TESTS} .= ' '.join ' ', map { glob } @patterns;
 }
+
+mkdir 'inc' unless -d 'inc';
 
 ExtUtils::MakeMaker::WriteMakefile( %config );
