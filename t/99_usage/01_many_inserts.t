@@ -19,7 +19,10 @@ BEGIN {
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
 }
 
-use Time::HiRes qw( gettimeofday );
+use Time::HiRes qw(
+    gettimeofday
+    usleep
+);
 use Redis::CappedCollection qw(
     DEFAULT_SERVER
     DEFAULT_PORT
@@ -100,6 +103,7 @@ sub test_insert {
             undef,
             gettimeofday + 0,
             );
+        usleep 1;
 
         while ( scalar( @data ) * DATA_LEN > $coll->size )
         {
@@ -116,7 +120,8 @@ sub test_insert {
         push @real_data, $data + 0;
     }
 
-    is "@real_data", "@data", 'everything is working properly ('.( scalar @data ).' The remaining elements)';
+#    is "@real_data", "@data", 'everything is working properly ('.( scalar @data ).' The remaining elements)';
+    is_deeply( \@real_data, \@data, 'everything is working properly ('.( scalar @data ).' The remaining elements)' );
 }
 
 test_insert( 0 );                               #-- only MAX_SIZE

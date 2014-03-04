@@ -216,14 +216,14 @@ foreach my $arg ( ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999
 }
 is $coll.'', $tmp, "value has not changed";
 
-$tmp = $coll.'';
-foreach my $arg ( ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid ) )
-{
-    dies_ok { $coll = Redis::CappedCollection->new(
-        redis => $arg,
-        ) } "expecting to die";
-}
-is $coll.'', $tmp, "value has not changed";
+#$tmp = $coll.'';
+#foreach my $arg ( ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid ) )
+#{
+#    dies_ok { $coll = Redis::CappedCollection->new(
+#        redis => $arg,
+#        ) } "expecting to die";
+#}
+#is $coll.'', $tmp, "value has not changed";
 
 $tmp = $coll.'';
 foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
