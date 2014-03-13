@@ -40,7 +40,7 @@ use constant {
 
 my $redis;
 my $real_redis;
-my $port = Net::EmptyPort::empty_port( 32637 ); # 32637-32766 Unassigned
+my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
 if ( !$real_redis )
@@ -65,7 +65,7 @@ sub new_connect {
 
     $redis = Test::RedisServer->new( conf =>
         {
-            port                => Net::EmptyPort::empty_port( 32637 ),
+            port                => Net::EmptyPort::empty_port( DEFAULT_PORT ),
             maxmemory           => 0,
             "maxmemory-policy"  => 'noeviction',
         } );
@@ -120,7 +120,6 @@ sub test_insert {
         push @real_data, $data + 0;
     }
 
-#    is "@real_data", "@data", 'everything is working properly ('.( scalar @data ).' The remaining elements)';
     is_deeply( \@real_data, \@data, 'everything is working properly ('.( scalar @data ).' The remaining elements)' );
 }
 

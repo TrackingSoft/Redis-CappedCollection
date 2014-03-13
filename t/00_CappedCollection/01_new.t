@@ -47,7 +47,7 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
-my $port = Net::EmptyPort::empty_port( 32637 ); # 32637-32766 Unassigned
+my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
 my $exists_real_redis = 1;
@@ -279,7 +279,7 @@ foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
     is $coll.'', $tmp, "value has not changed";
 }
 
-$port = Net::EmptyPort::empty_port( 32637 );
+$port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 $redis = Test::RedisServer->new( conf =>
     {
         port                => $port,

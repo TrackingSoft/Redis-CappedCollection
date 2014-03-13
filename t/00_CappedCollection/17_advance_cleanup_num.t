@@ -47,7 +47,7 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
-my $port = Net::EmptyPort::empty_port( 32637 ); # 32637-32766 Unassigned
+my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
 if ( !$real_redis )
@@ -83,7 +83,7 @@ sub new_connect {
     # For Test::RedisServer
     $redis = Test::RedisServer->new( conf =>
         {
-            port                => Net::EmptyPort::empty_port( 32637 ),
+            port                => Net::EmptyPort::empty_port( DEFAULT_PORT ),
             maxmemory           => $maxmemory,
             "maxmemory-policy"  => 'noeviction',
             "maxmemory-samples" => 100,
@@ -179,7 +179,7 @@ is "@arr", "** D E F G H I J", "correct value";
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->new(
-        redis               => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( 32637 ),
+        redis               => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
         advance_cleanup_num => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }
