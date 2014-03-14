@@ -36,7 +36,7 @@ my %config = (
         provides                => {
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
-                version                     => '0.11'
+                version                     => '0.12'
             },
         },
     },

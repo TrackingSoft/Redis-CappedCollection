@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+0.12  Fri Mar  14 2014
+    CHANGES:
+    - Change the port used for testing.
+
 0.11  Fri Nov  15 2013
     CHANGES:
     - Adjust Redis server connection parameters.
