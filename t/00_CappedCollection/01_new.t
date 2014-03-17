@@ -47,38 +47,43 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
+my $skip_msg;
+my $error;
 my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
+$error = $@;
 my $exists_real_redis = 1;
 if ( !$real_redis )
 {
     $exists_real_redis = 0;
     $redis = eval { Test::RedisServer->new( conf => { port => $port }, _redis => 1 ) };
+    $error = $@;
     if ( $redis )
     {
         eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
+        $error = $@;
+    }
+    else
+    {
+        $skip_msg = "Unable to create test Redis server";
     }
 }
 my $redis_port = $exists_real_redis ? DEFAULT_PORT : $port;
 my $redis_addr = DEFAULT_SERVER.":$redis_port";
-my @redis_params = ( $exists_real_redis ? () : ( redis => $redis_addr ) );
 
-my $skip_msg;
-$skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
-$skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
+unless ( $skip_msg )
+{
+    $skip_msg = "Redis server is unavailable" unless ( !$error && $real_redis && $real_redis->ping );
+    $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
+}
 
 SKIP: {
     diag $skip_msg if $skip_msg;
     skip( $skip_msg, 1 ) if $skip_msg;
 
-# For real Redis:
-#$redis = $real_redis;
-#isa_ok( $redis, 'Redis' );
-#$port = DEFAULT_PORT;
-
 # For Test::RedisServer
-$real_redis->quit;
+$real_redis->quit if $real_redis;
 $redis = Test::RedisServer->new( conf => { port => $port }, timeout => 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 

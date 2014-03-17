@@ -47,27 +47,27 @@ use Redis::CappedCollection qw(
 
 my $redis;
 my $real_redis;
+my $skip_msg;
 my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
-eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
-if ( !$real_redis )
+$redis = eval { Test::RedisServer->new( conf => { port => $port }, timeout => 3 ) };
+if ( $redis )
 {
-    $redis = eval { Test::RedisServer->new( conf => { port => $port }, timeout => 3 ) };
-    if ( $redis )
-    {
-        eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
-    }
+    eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
+    $skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
+    $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
+    $real_redis->quit if $real_redis;
 }
-my $skip_msg;
-$skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
-$skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
+else
+{
+    $skip_msg = "Unable to create test Redis server";
+}
 
 SKIP: {
     diag $skip_msg if $skip_msg;
     skip( $skip_msg, 1 ) if $skip_msg;
 
 # For Test::RedisServer
-$real_redis->quit;
 
 my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $size, $older_allowed, $info );
 my $uuid = new Data::UUID;
@@ -75,6 +75,7 @@ my $msg = "attribute is set correctly";
 
 sub new_connect {
     # For Test::RedisServer
+    $redis->stop if $redis;
     $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
     $redis = Test::RedisServer->new( conf =>
         {
