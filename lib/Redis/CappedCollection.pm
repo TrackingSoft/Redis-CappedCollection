@@ -7,7 +7,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.12
+This documentation refers to C<Redis::CappedCollection> version 0.13
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 
 use Exporter qw(
     import

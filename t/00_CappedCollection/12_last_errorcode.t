@@ -4,7 +4,7 @@ use 5.010;
 use strict;
 use warnings;
 
-use lib 'lib';
+use lib 'lib', 't/tlib';
 
 use Test::More;
 plan "no_plan";
@@ -43,25 +43,14 @@ use Redis::CappedCollection qw(
     EOLDERTHANALLOWED
     );
 
+use Redis::CappedCollection::Test::Utils qw(
+    get_redis
+    verify_redis
+);
+
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
 
-my $redis;
-my $real_redis;
-my $skip_msg;
-my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
-
-$redis = eval { Test::RedisServer->new( conf => { port => $port }, timeout => 3 ) };
-if ( $redis )
-{
-    eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
-    $skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
-    $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
-    $real_redis->quit if $real_redis;
-}
-else
-{
-    $skip_msg = "Unable to create test Redis server";
-}
+my ( $redis, $skip_msg, $port ) = verify_redis();
 
 SKIP: {
     diag $skip_msg if $skip_msg;
@@ -77,7 +66,7 @@ sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
     $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
-    $redis = Test::RedisServer->new( conf =>
+    $redis = get_redis( conf =>
         {
             port                => $port,
             maxmemory           => $maxmemory,
@@ -159,13 +148,9 @@ new_connect();
 
 #-- EMAXMEMORYLIMIT
 
-SKIP:
-{
-    skip( 'because Test::RedisServer required for that test', 1 ) if eval { $real_redis->ping };
-
     $maxmemory = 1024 * 1024;
     new_connect();
-    my ( undef, $max_datasize ) = $coll->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
+    ( undef, $max_datasize ) = $coll->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
     is $max_datasize, $maxmemory, "value is set correctly";
 
     $tmp = '*' x 1024;
@@ -181,13 +166,8 @@ SKIP:
     }
 
     $coll->drop_collection;
-}
 
 #-- EMAXMEMORYPOLICY
-
-SKIP:
-{
-    skip( 'because Test::RedisServer required for that test', 1 ) if eval { $real_redis->ping };
 
 #    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
 #    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
@@ -197,13 +177,8 @@ SKIP:
 #    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
 
     dies_ok { new_connect() } "expecting to die: EMAXMEMORYPOLICY";
-}
 
 #-- ECOLLDELETED
-
-SKIP:
-{
-    skip( 'because Test::RedisServer required for that test', 1 ) if eval { $real_redis->ping };
 
 #    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
 #    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
@@ -222,7 +197,6 @@ SKIP:
     is $coll->last_errorcode, ECOLLDELETED, "ECOLLDELETED";
     note '$@: ', $@;
     $coll->drop_collection;
-}
 
 #-- EREDIS
 
