@@ -50,6 +50,7 @@ use Redis::CappedCollection::Test::Utils qw(
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [] )
 
+my $redis_error = "Unable to create test Redis server";
 my ( $redis, $skip_msg, $port ) = verify_redis();
 
 SKIP: {
@@ -74,6 +75,7 @@ sub new_connect {
             "maxmemory-policy"  => 'noeviction',
             "maxmemory-samples" => 100,
         } );
+    skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->new(

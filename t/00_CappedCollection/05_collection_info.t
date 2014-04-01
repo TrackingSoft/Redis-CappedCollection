@@ -45,7 +45,6 @@ use Redis::CappedCollection qw(
     );
 
 use Redis::CappedCollection::Test::Utils qw(
-    get_redis
     verify_redis
 );
 

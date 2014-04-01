@@ -40,7 +40,7 @@ sub get_redis
         last unless $error;
         sleep 1;
     }
-    BAIL_OUT "failed to launch redis-server" if $error;
+    return if $error;
 
     return $redis;
 }
@@ -52,7 +52,7 @@ sub verify_redis
     my $skip_msg;
     my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
-    $redis = eval { get_redis( conf => { port => $port }, timeout => 3 ) };
+    $redis = get_redis( conf => { port => $port }, timeout => 3 );
     if ( $redis )
     {
         eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };

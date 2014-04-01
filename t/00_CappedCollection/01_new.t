@@ -45,7 +45,6 @@ use Redis::CappedCollection qw(
 
 use Redis::CappedCollection::Test::Utils qw(
     get_redis
-    verify_redis
 );
 
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [] )
@@ -54,6 +53,7 @@ my $redis;
 my $real_redis;
 my $skip_msg;
 my $error;
+my $redis_error = "Unable to create test Redis server";
 my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 
 eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".DEFAULT_PORT ) };
@@ -62,8 +62,7 @@ my $exists_real_redis = 1;
 if ( !$real_redis )
 {
     $exists_real_redis = 0;
-    $redis = eval { get_redis( conf => { port => $port }, _redis => 1 ) };
-    $error = $@;
+    $redis = get_redis( conf => { port => $port }, _redis => 1 );
     if ( $redis )
     {
         eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
@@ -71,7 +70,7 @@ if ( !$real_redis )
     }
     else
     {
-        $skip_msg = "Unable to create test Redis server";
+        $skip_msg = $redis_error;
     }
 }
 my $redis_port = $exists_real_redis ? DEFAULT_PORT : $port;
@@ -90,6 +89,7 @@ SKIP: {
 # For Test::RedisServer
 $real_redis->quit if $real_redis;
 $redis = get_redis( conf => { port => $port }, timeout => 1 ) unless $redis;
+skip( $redis_error, 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
 my ( $coll, $name, $tmp, $status_key, $queue_key );
@@ -289,12 +289,14 @@ foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
     is $coll.'', $tmp, "value has not changed";
 }
 
+$redis->stop if $redis;
 $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
 $redis = get_redis( conf =>
     {
         port                => $port,
         maxmemory           => 1_000_000,
     } );
+skip( $redis_error, 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
 lives_ok { $coll = Redis::CappedCollection->new(

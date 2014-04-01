@@ -43,6 +43,7 @@ use constant {
     advance_cleanup_bytes   => 501,
     };
 
+my $redis_error = "Unable to create test Redis server";
 my ( $redis, $skip_msg, $port ) = verify_redis();
 
 SKIP: {
@@ -60,6 +61,7 @@ sub new_connect {
             maxmemory           => 0,
             "maxmemory-policy"  => 'noeviction',
         } );
+    skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
     my $coll = Redis::CappedCollection->new(
