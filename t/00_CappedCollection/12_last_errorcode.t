@@ -67,7 +67,7 @@ sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
     $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
-    $redis = get_redis( conf =>
+    $redis = get_redis( $redis, conf =>
         {
             port                => $port,
             maxmemory           => $maxmemory,

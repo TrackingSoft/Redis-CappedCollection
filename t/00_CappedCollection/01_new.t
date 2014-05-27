@@ -62,7 +62,7 @@ my $exists_real_redis = 1;
 if ( !$real_redis )
 {
     $exists_real_redis = 0;
-    $redis = get_redis( conf => { port => $port }, _redis => 1 );
+    $redis = get_redis( $redis, conf => { port => $port }, _redis => 1 );
     if ( $redis )
     {
         eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
@@ -88,7 +88,7 @@ SKIP: {
 
 # For Test::RedisServer
 $real_redis->quit if $real_redis;
-$redis = get_redis( conf => { port => $port }, timeout => 1 ) unless $redis;
+$redis = get_redis( $redis, conf => { port => $port }, timeout => 1 ) unless $redis;
 skip( $redis_error, 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
@@ -291,7 +291,7 @@ foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 
 $redis->stop if $redis;
 $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
-$redis = get_redis( conf =>
+$redis = get_redis( $redis, conf =>
     {
         port                => $port,
         maxmemory           => 1_000_000,

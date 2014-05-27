@@ -63,10 +63,11 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $m
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
+my $maxmemory_mode;
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $redis = get_redis( conf =>
+    $redis = get_redis( $redis, conf =>
         {
             port                => $port,
             maxmemory           => 0,
@@ -79,6 +80,7 @@ sub new_connect {
 
     $coll = Redis::CappedCollection->new(
         $redis,
+        defined( $maxmemory_mode ) ? ( check_maxmemory => $maxmemory_mode ) : (),
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
 
@@ -91,6 +93,16 @@ sub new_connect {
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
 
+#-- check_maxmemory argument
+
+$maxmemory_mode = 0;
+new_connect();
+is $coll->_maxmemory_policy, 'volatile-lru', 'check_maxmemory correct';
+$maxmemory_mode = 1;
+new_connect();
+is $coll->_maxmemory_policy, 'noeviction', 'check_maxmemory correct';
+
+undef $maxmemory_mode;
 new_connect();
 
 #-- all correct

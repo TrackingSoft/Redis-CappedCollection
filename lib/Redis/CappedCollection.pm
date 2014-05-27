@@ -7,7 +7,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.15
+This documentation refers to C<Redis::CappedCollection> version 0.16
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '0.15';
+our $VERSION = '0.16';
 
 use Exporter qw(
     import
@@ -1544,6 +1544,14 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # Redis::CappedCollection data structure
                         # (on Redis server) look at the
                         # "CappedCollection data structure" section.
+        check_maxmemory => 1,   # Optional boolean argument (default is true)
+                        # defines if attempt is made to find out maximum
+                        # available memory from Redis.
+                        # In some cases Redis implementation forbids such request,
+                        # but setting 'check_maxmemory' to false can be used
+                        # as a workaround. In this case we assume that
+                        # 'maxmemory-policy' is 'volatile-lru'
+                        # (as default in 'redis.conf').
     );
 
 Requirements for arguments C<name>, C<size>, are described in more detail
@@ -1602,9 +1610,14 @@ sub BUILD {
     $self->_redis( $self->_redis_constructor )
         unless ( $self->_redis );
 
-    my ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
-    defined( _NONNEGINT( $maxmemory ) )
-        or $self->_throw( ENETWORK );
+    my $maxmemory;
+    if ( $self->_check_maxmemory ) {
+        ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
+        defined( _NONNEGINT( $maxmemory ) )
+            or $self->_throw( ENETWORK );
+    } else {
+        $maxmemory = MAX_DATASIZE;
+    }
 
     my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
     if ( $major < 2 || ( $major == 2 && $minor <= 4 ) ) {
@@ -1612,9 +1625,16 @@ sub BUILD {
         confess "Need a Redis server version 2.6 or higher";
     }
 
-    $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
-    if ( $self->_maxmemory_policy =~ /^all/ ) {
-        $self->_throw( EMAXMEMORYPOLICY );
+    if ( $self->_check_maxmemory ) {
+        $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
+        if ( $self->_maxmemory_policy =~ /^all/ ) {
+            $self->_throw( EMAXMEMORYPOLICY );
+        }
+    } else {
+        # redis.conf :
+        #   The default is:
+        #   maxmemory-policy volatile-lru
+        $self->_maxmemory_policy( 'volatile-lru' );
     }
 
     $self->_maxmemory( $maxmemory );
@@ -1823,6 +1843,13 @@ has 'last_errorcode'        => (
     writer      => '_set_last_errorcode',
     isa         => 'Int',
     default     => 0,
+);
+
+has '_check_maxmemory'            => (
+    is          => 'ro',
+    init_arg    => 'check_maxmemory',
+    isa         => 'Bool',
+    default     => 1,
 );
 
 #-- public methods -------------------------------------------------------------
@@ -2950,6 +2977,11 @@ L<Redis::CappedCollection|Redis::CappedCollection> - Object interface to create
 a collection, addition of data and data manipulation.
 
 L<Redis|Redis> - Perl binding for Redis database.
+
+=head1 SOURCE CODE
+
+Redis::CappedCollection is hosted on GitHub:
+L<https://github.com/TrackingSoft/Redis-CappedCollection>
 
 =head1 AUTHOR
 
