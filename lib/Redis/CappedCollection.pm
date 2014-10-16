@@ -7,7 +7,7 @@ a auto-FIFO age-out feature.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 0.16
+This documentation refers to C<Redis::CappedCollection> version 0.17
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '0.16';
+our $VERSION = '0.17';
 
 use Exporter qw(
     import
@@ -61,7 +61,7 @@ use Params::Util qw(
     _NUMBER
     _STRING
 );
-use Redis;
+use Redis '1.976';
 use Try::Tiny;
 
 #-- declarations ---------------------------------------------------------------
@@ -2448,6 +2448,8 @@ The following examples illustrate uses of the C<quit> method:
 =cut
 sub quit {
     my ( $self ) = @_;
+
+    return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
 
     $self->_set_last_errorcode( ENOERROR );
     $self->_clear_sha1;

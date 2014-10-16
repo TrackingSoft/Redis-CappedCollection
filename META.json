@@ -21,10 +21,11 @@
       ]
    },
    "prereqs" : {
-      "build" : {
+      "test" : {
          "requires" : {
             "Net::EmptyPort" : "0",
             "Test::Exception" : "0.31",
+            "Test::NoWarnings" : "1.04",
             "Test::RedisServer" : "0.04"
          }
       },
@@ -39,7 +40,7 @@
             "Digest::SHA1" : "2.13",
             "Mouse" : "0.97",
             "Params::Util" : "1.07",
-            "Redis" : "1.963",
+            "Redis" : "1.976",
             "Try::Tiny" : "0.18",
             "perl" : "5.010"
          }
@@ -48,9 +49,16 @@
    "provides" : {
       "Redis::CappedCollection" : {
          "file" : "lib/Redis/CappedCollection.pm",
-         "version" : "0.16"
+         "version" : "0.17"
       }
    },
    "release_status" : "stable",
-   "version" : "0.16"
+   "version" : "0.17",
+   "resources" : {
+      "repository" : {
+         "type" : "git",
+         "url" : "git://github.com/TrackingSoft/Redis-CappedCollection.git",
+         "web" : "http://github.com/TrackingSoft/Redis-CappedCollection"
+      }
+   }
 }

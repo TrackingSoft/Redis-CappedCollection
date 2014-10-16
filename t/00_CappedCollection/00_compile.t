@@ -6,7 +6,12 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 23;
+use Test::More tests => 24;
+
+BEGIN {
+    eval 'use Test::NoWarnings';    ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
+}
 
 BEGIN { use_ok 'Redis::CappedCollection' }
 

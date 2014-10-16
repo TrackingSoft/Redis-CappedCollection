@@ -13,17 +13,18 @@ my %config = (
     MIN_PERL_VERSION            => '5.010',
 # more to the list $Module::CoreList::version{5.010}
     PREREQ_PM                   => {
-        'Data::UUID'            => 1.217,
-        'Digest::SHA1'          => 2.13,
-        'Mouse'                 => 0.97,
-        'Params::Util'          => 1.07,
-        'Redis'                 => 1.963,
-        'Try::Tiny'             => 0.18,
+        'Data::UUID'            => '1.217',
+        'Digest::SHA1'          => '2.13',
+        'Mouse'                 => '0.97',
+        'Params::Util'          => '1.07',
+        'Redis'                 => '1.976',
+        'Try::Tiny'             => '0.18',
         },
-    BUILD_REQUIRES              => {
-        'Net::EmptyPort'        => 0,
-        'Test::Exception'       => 0.31,
-        'Test::RedisServer'     => 0.04,
+    TEST_REQUIRES               => {
+        'Net::EmptyPort'        => '0',
+        'Test::Exception'       => '0.31',
+        'Test::NoWarnings'      => '1.04',
+        'Test::RedisServer'     => '0.04',
         },
     META_MERGE          => {
         no_index                => {
@@ -36,7 +37,7 @@ my %config = (
         provides                => {
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
-                version                     => '0.16'
+                version                     => '0.17'
             },
         },
     },

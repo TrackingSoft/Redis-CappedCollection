@@ -2,12 +2,18 @@
 abstract: 'Redis::CappedCollection module provides the fixed sized collections that have a auto-FIFO age-out feature.'
 author:
   - 'TrackingSoft LLC <sgladkov@trackingsoft.com>'
-build_requires:
+test_requires:
   Net::EmptyPort: 0
   Test::Exception: 0.31
+  Test::NoWarnings: 1.04
   Test::RedisServer: 0.04
 configure_requires:
   ExtUtils::MakeMaker: 0
+build_requires:
+  ExtUtils::MakeMaker: '0'
+  Net::EmptyPort: '0'
+  Test::Exception: '0.31'
+  Test::RedisServer: '0.04'
 dynamic_config: 1
 generated_by: 'ExtUtils::MakeMaker version 6.8, CPAN::Meta::Converter version 2.132830'
 license: perl
@@ -23,13 +29,16 @@ no_index:
 provides:
   Redis::CappedCollection:
     file: lib/Redis/CappedCollection.pm
-    version: 0.16
+    version: 0.17
 requires:
   Data::UUID: 1.217
   Digest::SHA1: 2.13
   Mouse: 0.97
   Params::Util: 1.07
-  Redis: 1.963
+  Redis: 1.976
   Try::Tiny: 0.18
   perl: 5.010
-version: 0.16
+version: 0.17
+resources:
+  homepage: https://github.com/TrackingSoft/Redis-CappedCollection
+  repository: git://github.com/TrackingSoft/Redis-CappedCollection.git

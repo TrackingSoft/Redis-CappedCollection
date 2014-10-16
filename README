@@ -35,6 +35,7 @@ The Redis::CappedCollection module has the following optional dependencies:
 
    Net::EmptyPort
    Test::Exception
+   Test::NoWarnings
    Test::RedisServer
 
 If the optional modules are missing, some "prereq" tests are skipped.

@@ -11,7 +11,7 @@ use lib 'lib';
 use bytes;
 use Carp;
 use Time::HiRes     qw( gettimeofday );
-use Redis;
+use Redis '1.976';
 use List::Util      qw( min sum );
 use Getopt::Long    qw( GetOptions );
 use Data::Dumper;

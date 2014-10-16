@@ -1,5 +1,10 @@
 Revision history for Redis::CappedCollection module
 
+0.17  ??? ???  ?? 20??
+    CHANGES:
+    - The 'quit' method not ask the Redis server to close the connection
+      on global destruction phase.
+
 0.16  Tue May  27 2014
     CHANGES:
     - Added argument 'check_maxmemory' to the Redis::CappedCollection->new .
