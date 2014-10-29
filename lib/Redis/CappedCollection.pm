@@ -2449,7 +2449,7 @@ The following examples illustrate uses of the C<quit> method:
 sub quit {
     my ( $self ) = @_;
 
-    return if ${^GLOBAL_PHASE} eq 'DESTRUCT';
+    return if $] >= 5.14 && ${^GLOBAL_PHASE} eq 'DESTRUCT';
 
     $self->_set_last_errorcode( ENOERROR );
     $self->_clear_sha1;
