@@ -82,10 +82,10 @@ use Try::Tiny;
     my $coll = Redis::CappedCollection->new( redis => $server );
 
     #-- Producer
-    my $list_id = $coll->insert( 'Some data stuff' );
+    my $list_id = $coll->insert( 'Some data' );
 
     # Change the element of the list with the ID $list_id
-    $updated = $coll->update( $list_id, $data_id, 'Some new data stuff' );
+    $updated = $coll->update( $list_id, $data_id, 'New data' );
 
     #-- Consumer
     # Get data from a list with the ID $list_id
@@ -1890,16 +1890,16 @@ The following examples illustrate uses of the C<insert> method:
 In a scalar context, the method returns the ID of the data list to which
 you add the data.
 
-    $list_id = $coll->insert( 'Some data stuff', 'Some_id' );
+    $list_id = $coll->insert( 'Some data', 'Some_id' );
     # or
-    $list_id = $coll->insert( 'Some data stuff' );
+    $list_id = $coll->insert( 'Some data' );
 
 In a list context, the method returns the ID of the data list to which
 your adding the data and the data ID corresponding to your data.
 
-    ( $list_id, $data_id ) = $coll->insert( 'Some data stuff', 'Some_id' );
+    ( $list_id, $data_id ) = $coll->insert( 'Some data', 'Some_id' );
     # or
-    ( $list_id, $data_id ) = $coll->insert( 'Some data stuff' );
+    ( $list_id, $data_id ) = $coll->insert( 'Some data' );
 
 =cut
 sub insert {
@@ -1960,7 +1960,7 @@ through the method L</max_datasize>.
 
 The following examples illustrate uses of the C<update> method:
 
-    if ( $coll->update( $list_id, 0, 'Some new data stuff' ) ) {
+    if ( $coll->update( $list_id, 0, 'New data' ) ) {
         say "Data updated successfully";
     } else {
         say "The data is not updated";
@@ -2750,17 +2750,17 @@ The example shows a possible treatment for possible errors.
 
     eval {
         $list_id = $coll->insert(
-            'Some data stuff',
+            'Some data',
             'Some_id',      # If not specified, it creates
                             # a new items list named as UUID
         );
         say "Added data in a list with '", $list_id, "' id" );
 
         # Change the "zero" element of the list with the ID $list_id
-        if ( $coll->update( $list_id, 0, 'Some new data stuff' ) ) {
+        if ( $coll->update( $list_id, 0, 'New data' ) ) {
             say 'Data updated successfully';
         } else {
-            say 'The data is not updated';
+            say 'Failed to update element';
         }
     };
     exception( $coll, $@ ) if $@;
@@ -2771,7 +2771,7 @@ The example shows a possible treatment for possible errors.
     eval {
         @data = $coll->receive( $list_id );
         say "List '$list_id' has '$_'" foreach @data;
-        # or to obtain the data in the order they are received
+        # or to obtain records in the order they were placed
         while ( my ( $list_id, $data ) = $coll->pop_oldest ) {
             say "List '$list_id' had '$data'";
         }
@@ -2784,7 +2784,7 @@ The example shows a possible treatment for possible errors.
     my ( $length, $lists, $items );
     eval {
         my $info = $coll->collection_info;
-        say 'An existing collection uses ', $info->{length}, ' byte of data, ',
+        say 'An existing collection uses ', $info->{length}, ' byte of memory, ',
             'in ', $info->{items}, ' items are placed in ',
             $info->{lists}, ' lists';
 
@@ -2799,18 +2799,18 @@ The example shows a possible treatment for possible errors.
         $coll->quit;
 
         # Before use, make sure that the collection
-        # is not being used by other customers
+        # is not being used by other clients
         #$coll->drop_collection;
     };
     exception( $coll, $@ ) if $@;
 
 =head2 CappedCollection data structure
 
-Using the currently selected database (default = 0).
+Using currently selected database (default = 0).
 
-While working on the Redis server creates and uses these data structures:
+CappedCollection package creates the following data structures on Redis:
 
-    #-- To store the collection status:
+    #-- To store collection status:
     # HASH    Namespace:status:Collection_id
     # For example:
     $ redis-cli
@@ -2835,7 +2835,7 @@ While working on the Redis server creates and uses these data structures:
     11) "big_data_threshold"    # hash key
     12) "0"                     # the key value
 
-    #-- To store the collection queue:
+    #-- To store collection queue:
     # ZSET    Namespace:queue:Collection_id
     # For example:
     redis 127.0.0.1:6379> KEYS Capped:queue:*
@@ -2853,7 +2853,7 @@ While working on the Redis server creates and uses these data structures:
     #                   Member: Data List id (UUID)
     ...
 
-    #-- To store the CappedCollection data:
+    #-- To store CappedCollection data:
     # HASH    Namespace:I:Collection_id:DataList_id
     # HASH    Namespace:D:Collection_id:DataList_id
     # ZSET    Namespace:T:Collection_id:DataList_id
@@ -2904,11 +2904,10 @@ While working on the Redis server creates and uses these data structures:
 
 =head1 DEPENDENCIES
 
-In order to install and use this package you will need Perl version
-5.010 or better. The Redis::CappedCollection module depends on other
-packages that are distributed separately from Perl. We recommend that
-you have the following packages installed before you install
-Redis::CappedCollection :
+In order to install and use this package Perl version 5.010 or better is
+required. Redis::CappedCollection module depends on other packages
+that are distributed separately from Perl. We recommend the following packages
+to be installed before installing Redis::CappedCollection :
 
     Data::UUID
     Digest::SHA1
@@ -2935,10 +2934,10 @@ for all dependencies and compiling them manually).
 
 =head1 BUGS AND LIMITATIONS
 
-Need a Redis server version 2.6 or higher as module uses Redis Lua scripting.
+Redis server version 2.6 or higher is required, as module uses Redis Lua scripting language.
 
 The use of C<maxmemory-police all*> in the F<redis.conf> file could lead to
-a serious (but hard to detect) problem as Redis server may delete
+a serious (and hard to detect) problem as Redis server may delete
 the collection element. Therefore the C<Redis::CappedCollection> does not work with
 mode C<maxmemory-police all*> in the F<redis.conf>.
 
@@ -2948,8 +2947,8 @@ the Redis Lua script (C<'EVAL'> or C<'EVALSHA'> command).
 So the Redis server may not be able to correctly forward the request
 to the appropriate node in the cluster.
 
-We strongly recommend using the option C<maxmemory> in the F<redis.conf> file if
-the data set may be large.
+We strongly recommend setting C<maxmemory> option in the F<redis.conf> file in
+case data volume is expected to be high.
 
 WARNING: According to C<initServer()> function in F<redis.c> :
 
