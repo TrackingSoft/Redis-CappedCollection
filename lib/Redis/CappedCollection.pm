@@ -56,6 +56,7 @@ use List::Util qw(
 use Mouse;
 use Mouse::Util::TypeConstraints;
 use Params::Util qw(
+    _CLASSISA
     _INSTANCE
     _NONNEGINT
     _NUMBER
@@ -79,7 +80,7 @@ use Try::Tiny;
     );
 
     my $server = DEFAULT_SERVER.':'.DEFAULT_PORT;
-    my $coll = Redis::CappedCollection->new( redis => $server );
+    my $coll = Redis::CappedCollection->create( redis => $server );
 
     #-- Producer
     my $list_id = $coll->insert( 'Some data' );
@@ -219,7 +220,7 @@ use constant ENOERROR           => 0;
 
 1 - Invalid argument.
 
-This means that you didn't give the right argument to a C<new>
+This means that you didn't give the right argument to a C<create>
 or to other L<method|/METHODS>.
 
 =cut
@@ -1246,13 +1247,13 @@ local status_exist  = redis.call( 'EXISTS', status_key )
 
 -- if there is a collection
 if status_exist == 1 then
-    local vals      = redis.call( 'HMGET', status_key, 'length', 'lists', 'items' )
+    local vals      = redis.call( 'HMGET', status_key, 'size', 'length', 'lists', 'items', 'older_allowed', 'big_data_threshold' )
     local oldest    = redis.call( 'ZRANGE', queue_key, 0, 0, 'WITHSCORES' )
     local oldest_time = oldest[2]
-    return { status_exist, vals[1], vals[2], vals[3], oldest_time }
+    return { status_exist, vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], oldest_time }
 end
 
-return { status_exist, false, false, false, false }
+return { status_exist, false, false, false, false, false, false, false }
 END_COLLECTION_INFO
 
 $lua_script_body{info} = <<"END_INFO";
@@ -1476,11 +1477,11 @@ subtype __PACKAGE__.'::DataStr',
 
 =head2 CONSTRUCTOR
 
-=head3 C<new( redis =E<gt> $server, ... )>
+=head3 C<create( redis =E<gt> $server, ... )>
 
 It generates a C<Redis::CappedCollection> object to communicate with
 the Redis server and can be called as either a class method or an object method.
-If invoked with no arguments the constructor C<new> creates and returns
+If invoked with no arguments the constructor C<create> creates and returns
 a C<Redis::CappedCollection> object that is configured
 to work with the default settings.
 
@@ -1503,11 +1504,11 @@ UTF-8 data should be serialized before passing to C<Redis::CappedCollection> for
 
 =back
 
-C<new> optionally takes arguments. These arguments are in key-value pairs.
+C<create> optionally takes arguments. These arguments are in key-value pairs.
 
-This example illustrates a C<new()> call with all the valid arguments:
+This example illustrates a C<create()> call with all the valid arguments:
 
-    my $coll = Redis::CappedCollection->new(
+    my $coll = Redis::CappedCollection->create(
         redis   => "$server:$port", # Default Redis local server and port
         name    => 'Some name', # If 'name' is not specified, it creates
                         # a new collection named as UUID.
@@ -1531,9 +1532,9 @@ This example illustrates a C<new()> call with all the valid arguments:
                         # is not limited.
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
-        older_allowed   => 0, # Permission to add data with time is less
-                        # than the data time of which was deleted from the list.
-                        # Default 0 - insert too old data is prohibited.
+        older_allowed   => 0, # Allowing adding an element to collection that's older
+                        # than the oldest element currently stored in collection.
+                        # Default 0.
                         # Is set for the new collection.
         big_data_threshold => 0, # The maximum number of items of data to store
                         # in an optimized format to reduce memory usage.
@@ -1557,21 +1558,24 @@ This example illustrates a C<new()> call with all the valid arguments:
 Requirements for arguments C<name>, C<size>, are described in more detail
 in the sections relating to the methods L</name>, L</size> .
 
-If the value of C<name> is specified, the work is done with a given collection
-or creates a new collection with the specified name.
+If the value of C<name> is specified, creates a new collection with the specified name.
 Do not use the symbol C<':'> in C<name>.
 
-The following examples illustrate other uses of the C<new> method:
-
-    $coll = Redis::CappedCollection->new();
-    my $next_coll = Redis::CappedCollection->new( $coll );
+The following examples illustrate other uses of the C<create> method:
 
     my $redis = Redis->new( redis => "$server:$port" );
-    $next_coll = Redis::CappedCollection->new( $redis );
+    my $coll = Redis::CappedCollection->create( $redis );
+    my $next_coll = Redis::CappedCollection->create( $coll, name => 'Some name' );
 
-An error will cause the program to halt (C<confess>) if an argument is not valid.
+An error will cause the program to halt (C<confess>) if an argument is not valid
+or the collection with same name already exists.
 
 =cut
+sub create {
+    my $class = _CLASSISA( shift, __PACKAGE__ ) or confess 'Must be called as a class method only';
+    return $class->new( @_, _create_from_naked_new => 0 );
+}
+
 around BUILDARGS => sub {
     my $orig  = shift;
     my $class = shift;
@@ -1582,7 +1586,7 @@ around BUILDARGS => sub {
             # have to look into the Redis object ...
             redis   => $redis->{server},
             _redis  => $redis,
-            @_
+            @_,
         );
     } elsif ( _INSTANCE( $_[0], 'Test::RedisServer' ) ) {
         # to test only
@@ -1590,14 +1594,14 @@ around BUILDARGS => sub {
         return $class->$orig(
             # have to look into the Test::RedisServer object ...
             redis   => '127.0.0.1:'.$redis->conf->{port},
-            @_
+            @_,
         );
     } elsif ( _INSTANCE( $_[0], __PACKAGE__ ) ) {
         my $coll = shift;
         return $class->$orig(
             redis   => $coll->_server,
             _redis  => $coll->_redis,
-            @_
+            @_,
         );
     } else {
         return $class->$orig( @_ );
@@ -1609,6 +1613,13 @@ sub BUILD {
 
     $self->_redis( $self->_redis_constructor )
         unless ( $self->_redis );
+
+    if ( $self->_create_from_naked_new ) {
+        warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
+    } else {
+        confess "Collection '".$self->name."' already exists"
+            if !$self->_create_from_open && $self->collection_exists( name => $self->name );
+    }
 
     my $maxmemory;
     if ( $self->_check_maxmemory ) {
@@ -1627,7 +1638,7 @@ sub BUILD {
 
     if ( $self->_check_maxmemory ) {
         $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
-        if ( $self->_maxmemory_policy =~ /^all/ ) {
+        if ( !$self->_create_from_open && $self->_maxmemory_policy =~ /^all/ ) {
             $self->_throw( EMAXMEMORYPOLICY );
         }
     } else {
@@ -1647,12 +1658,12 @@ sub BUILD {
         if ( $maxmemory && $self->size * $REDIS_MEMORY_OVERHEAD > $maxmemory );
 
     $self->_queue_key(  NAMESPACE.':queue:'.$self->name );
-    $self->_status_key( NAMESPACE.':status:'.$self->name );
+    $self->_status_key( _make_status_key( $self->name ) );
     $self->_info_keys(  NAMESPACE.':I:'.$self->name );
-    $self->_data_keys(  NAMESPACE.':D:'.$self->name );
+    $self->_data_keys(  _make_data_key( $self->name ) );
     $self->_time_keys(  NAMESPACE.':T:'.$self->name );
 
-    $self->_verify_collection;
+    $self->_verify_collection unless $self->_create_from_open;
 }
 
 #-- public attributes ----------------------------------------------------------
@@ -1665,6 +1676,71 @@ ATTENTION: In the L<Redis|Redis> module the synchronous commands throw an
 exception on receipt of an error reply, or return a non-error reply directly.
 
 =cut
+
+=head3 C<open( redis =E<gt> $server, name =E<gt> $name, ... )>
+
+It generates a C<Redis::CappedCollection> object to communicate with
+the Redis server to work with an existing collection.
+It Must be called as a class method only.
+
+C<open> optionally takes arguments. These arguments are in key-value pairs.
+Arguments description match the arguments description for L</create> method.
+
+The C<redis> and C<name> arguments are mandatory.
+Attributes C<size>, C<older_allowed>, C<big_data_threshold> are obtained from the existing collection.
+
+The C<open> creates and returns
+a C<Redis::CappedCollection> object that is configured
+to work with the default settings if the corresponding arguments are not given.
+
+It create a new connection to the Redis server if C<redis> argument is not a L<Redis> object
+and presented in the "$server:$port" format.
+
+The following examples illustrate uses of the C<open>:
+
+    my $redis = Redis->new( redis => "$server:$port" );
+    my $coll = Redis::CappedCollection::open( redis => $redis, name => 'Some name' );
+
+An error will cause the program to halt (C<confess>) if an argument is not valid
+or the collection not exists.
+
+=cut
+my @_asked_parameters = qw(
+    redis
+    name
+    advance_cleanup_bytes
+    advance_cleanup_num
+    max_datasize
+    check_maxmemory
+);
+my @_status_parameters = qw(
+    size
+    older_allowed
+    big_data_threshold
+);
+
+sub open {
+    my $class = _CLASSISA( shift, __PACKAGE__ ) or confess 'Must be called as a class method only';
+    my %arguments = @_;
+
+    my %params = ();
+    foreach my $param ( @_asked_parameters ) {
+        $params{ $param } = $arguments{ $param } if exists $arguments{ $param };
+    }
+
+    confess "'redis' argument is required"  unless exists $params{redis};
+    confess "'name' argument is required"   unless exists $params{name};
+
+    my $redis   = _get_redis( $params{redis} );
+    my $name    = $params{name};
+    if ( collection_exists( redis => $redis, name => $name ) ) {
+        my $info = collection_info( redis => $redis, name => $name );
+        $params{ $_ } = $info->{ $_ } foreach @_status_parameters;
+        return $class->new( @_, _create_from_naked_new => 0, _create_from_open => 1 );
+    } else {
+        confess "Collection '$name' not exists";
+    };
+}
 
 =head3 C<name>
 
@@ -1784,18 +1860,17 @@ has 'max_datasize'          => (
 
 =head3 C<older_allowed>
 
-The method of access to the C<older_allowed> attribute -
-permission to add data with time less than the data time which was
-deleted from the data list. Default 0 - insert too old data is prohibited.
+Method to access C<older_allowed> attribute which is allowing to add an element to collection
+that's older than the oldest element currently stored in collection. Default 0.
 
 The method returns the current value of the attribute.
 The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 =cut
 has 'older_allowed'         => (
-    is          => 'ro',
+    is          => 'rw',
     isa         => 'Bool',
-    default     => 1,
+    default     => 0,
 );
 
 =head3 C<big_data_threshold>
@@ -1825,7 +1900,7 @@ in the F<redis.conf> file.
 
 =cut
 has 'big_data_threshold'    => (
-    is          => 'ro',
+    is          => 'rw',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 0,
 );
@@ -1845,11 +1920,23 @@ has 'last_errorcode'        => (
     default     => 0,
 );
 
-has '_check_maxmemory'            => (
+has '_check_maxmemory'      => (
     is          => 'ro',
     init_arg    => 'check_maxmemory',
     isa         => 'Bool',
     default     => 1,
+);
+
+has '_create_from_naked_new'    => (
+    is          => 'ro',
+    isa         => 'Bool',
+    default     => 1,
+);
+
+has '_create_from_open'     => (
+    is          => 'ro',
+    isa         => 'Bool',
+    default     => 0,
 );
 
 #-- public methods -------------------------------------------------------------
@@ -2147,10 +2234,18 @@ sub pop_oldest {
     return @ret;
 }
 
-=head3 C<collection_info>
+=head3 C<collection_info( redis =E<gt> $server, name =E<gt> $name )>
 
 The method is designed to obtain information on the status of the collection
 and to see how much space an existing collection uses.
+It can be called as either the existing C<Redis::CappedCollection> object method or a class function.
+
+C<collection_info> optionally takes arguments. These arguments are in key-value pairs.
+Arguments description match the arguments description for L</create> method.
+
+If invoked as the object method C<collection_info> uses optional C<redis> and C<name>
+arguments from the origin object as defaults.
+In another case these arguments are mandatory.
 
 Returns a reference to a hash with the following elements:
 
@@ -2173,6 +2268,26 @@ C<items> - Number of data items stored in the collection.
 C<oldest_time> - Time corresponding to the oldest data in the collection.
 C<undef> if the collection does not contain data.
 
+=item *
+
+C<size> - The maximum size, in bytes, of the capped collection data.
+
+It described in more detail in the sections relating to the L</create> constructor.
+
+=item *
+
+C<older_allowed> - Is it allowed to put data in collection that is older than the oldest element
+stored in collection.
+
+It described in more detail in the sections relating to the L</create> constructor.
+
+=item *
+
+C<big_data_threshold> - The maximum number of items of data to store
+in an optimized format to reduce memory usage.
+
+It described in more detail in the sections relating to the L</create> constructor.
+
 =back
 
 The following examples illustrate uses of the C<collection_info> method:
@@ -2182,28 +2297,56 @@ The following examples illustrate uses of the C<collection_info> method:
         'in ', $info->{items}, ' items are placed in ',
         $info->{lists}, ' lists';
 
+An error will cause the program to halt (C<confess>) if an argument is not valid
+or the collection not exists.
+
 =cut
 sub collection_info {
-    my $self        = shift;
+    my @ret;
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        my $self   = shift;
 
-    $self->_set_last_errorcode( ENOERROR );
+        $self->_set_last_errorcode( ENOERROR );
 
-    my @ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'collection_info' ),
-        0,
-        $self->name,
-    );
+        @ret = $self->_call_redis(
+            $self->_lua_script_cmd( 'collection_info' ),
+            0,
+            $self->name,
+        );
 
-    unless ( shift @ret ) {
-        $self->_clear_sha1;
-        $self->_throw( ECOLLDELETED );
+        unless ( shift @ret ) {
+            $self->_clear_sha1;
+            $self->_throw( ECOLLDELETED );
+        }
+    } else {
+        shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
+        my %arguments = @_;
+
+        confess "'redis' argument is required"  unless defined $arguments{redis};
+        confess "'name' argument is required"   unless defined $arguments{name};
+
+        my $redis   = _get_redis( $arguments{redis} );
+        my $name    = $arguments{name};
+
+        @ret = _call_redis(
+            $redis,
+            _lua_script_cmd( $redis, 'collection_info' ),
+            0,
+            $name,
+        );
+
+        confess "Collection '$name.' info not received (".$ERROR[ ECOLLDELETED ].')'
+            unless shift @ret;
     }
 
     return {
-        length      => $ret[0],
-        lists       => $ret[1],
-        items       => $ret[2],
-        oldest_time => $ret[3] ? $ret[3] + 0 : $ret[3],
+        size                => $ret[0],
+        length              => $ret[1],
+        lists               => $ret[2],
+        items               => $ret[3],
+        older_allowed       => $ret[4],
+        big_data_threshold  => $ret[5],
+        oldest_time         => $ret[6] ? $ret[6] + 0 : $ret[6],
     };
 }
 
@@ -2283,6 +2426,57 @@ sub exists {
     return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
 }
 
+=head3 C<collection_exists( redis =E<gt> $server, name =E<gt> $name )>
+
+The C<collection_exists> is designed to test whether there is a collection.
+Returns true if the collection exists and false otherwise.
+
+It can be called as either the existing C<Redis::CappedCollection> object method or a class function.
+
+If invoked as the object method C<collection_exists> uses optional C<redis> and C<name>
+arguments from the origin object as defaults.
+If invoked as the class function C<collection_exists> uses mandatory C<redis> and C<name>
+arguments.
+
+These arguments are in key-value pairs.
+Arguments description match the arguments description for L</create> method.
+
+The following examples illustrate uses of the C<collection_exists>:
+
+    say 'The collection ', $coll->name, ' exists' if $coll->collection_exists;
+    my $redis = Redis->new( redis => "$server:$port" );
+    say "The collection 'Some name' exists"
+        if Redis::CappedCollection::collection_exists( redis => $redis, name => 'Some name' );
+
+An error will cause the program to halt (C<confess>) if an argument is not valid.
+
+=cut
+sub collection_exists {
+    my ( $self, $redis, $name );
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        $self   = shift;
+        $redis  = $self->_redis;
+        $name   = $self->name;
+    } else {
+        shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
+    }
+    my %arguments = @_;
+
+    unless ( $self ) {
+        confess "'redis' argument is required"  unless defined $arguments{redis};
+        confess "'name' argument is required"   unless defined $arguments{name};
+    }
+
+    $redis  = _get_redis( $arguments{redis} ) unless $self;
+    $name   = $arguments{name} if exists $arguments{name};
+
+    if ( $self ) {
+        return $self->_call_redis( 'EXISTS', _make_status_key( $name ) );
+    } else {
+        return _call_redis( $redis, 'EXISTS', _make_status_key( $name ) );
+    }
+}
+
 =head3 C<lists( $pattern )>
 
 Returns a list of identifiers stored in a collection.
@@ -2335,18 +2529,132 @@ sub lists {
     return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
 }
 
-=head3 C<drop_collection>
+=head3 C<resize( redis =E<gt> $server, name =E<gt> $name, ... )>
 
-Use the C<drop_collection> method to remove the entire collection.
-Method removes all the structures on the Redis server associated with
+Use the C<resize> to change the values of the parameters of the collection.
+It can be called as either the existing C<Redis::CappedCollection> object method or a class function.
+
+If invoked as the object method C<resize> uses optional C<redis> and C<name>
+arguments from the origin object as defaults.
+If invoked as the class function C<resize> uses mandatory C<redis> and C<name>
+arguments.
+
+These arguments are in key-value pairs.
+Arguments description match the arguments description for L</create> method.
+
+Possible to change the following parameters: C<size>, C<older_allowed>, C<big_data_threshold>.
+One or more parameters are required.
+
+Returns the number of completed changes.
+
+The following examples illustrate uses of the C<resize>:
+
+    $coll->resize( size => 100_000 );
+    my $redis = Redis->new( redis => "$server:$port" );
+    Redis::CappedCollection::resize( redis => $redis, name => 'Some name', older_allowed => 1 );
+
+Warning: Correctness of set values is not controlled and remains on the conscience of the client.
+
+An error will cause the program to halt (C<confess>) if an argument is not valid
+or the collection not exists.
+
+=cut
+sub resize {
+    my ( $self, $redis, $name );
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        $self   = shift;
+        $redis  = $self->_redis;
+        $name   = $self->name;
+    } else {
+        shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
+    }
+    my %arguments = @_;
+
+    unless ( $self ) {
+        confess "'redis' argument is required"  unless defined $arguments{redis};
+        confess "'name' argument is required"   unless defined $arguments{name};
+    }
+
+    $redis  = _get_redis( $arguments{redis} ) unless $self;
+    $name   = $arguments{name} if $arguments{name};
+
+    my $requested_changes = 0;
+    foreach my $parameter ( @_status_parameters ) {
+        ++$requested_changes if exists $arguments{ $parameter };
+    }
+    unless ( $requested_changes ) {
+        my $error = 'One or more parameters are required';
+        if ( $self ) {
+            $self->_throw( EMISMATCHARG, $error );
+        } else {
+            confess "$error : ".$ERROR[ EMISMATCHARG ].')'
+        }
+    }
+
+    my $resized = 0;
+    foreach my $parameter ( @_status_parameters ) {
+        if ( exists $arguments{ $parameter } ) {
+            if ( $parameter eq 'size' ) {
+                confess "'$parameter' must be nonnegative integer"
+                    unless _NONNEGINT( $arguments{ $parameter } );
+            } elsif ( $parameter eq 'older_allowed' ) {
+                $arguments{ $parameter } = $arguments{ $parameter } ? 1 :0;
+            } elsif ( $parameter eq 'big_data_threshold' ) {
+                confess "'$parameter' must be nonnegative integer"
+                    unless _NONNEGINT( $arguments{ $parameter } );
+            }
+
+            my $ret = 0;
+            my $new_val = $arguments{ $parameter };
+            if ( $self ) {
+                $ret = $self->_call_redis( 'HSET', _make_status_key( $self->name ), $parameter, $new_val );
+            } else {
+                $ret = _call_redis( $redis, 'HSET', _make_status_key( $name ), $parameter, $new_val );
+            }
+
+            if ( $ret == 0 ) {   # 0 if field already exists in the hash and the value was updated
+                if ( $self ) {
+                    if ( $parameter eq 'size' ) {
+                        $self->_set_size( $new_val );
+                    } else {
+                        $self->$parameter( $new_val );
+                    }
+                }
+                ++$resized;
+            } else {
+                my $msg = "Parameter $parameter not updated to '$new_val' for collection '$name'";
+                if ( $self ) {
+                    $self->_throw( ECOLLDELETED, $msg );
+                } else {
+                    confess "$msg (".$ERROR[ ECOLLDELETED ].')';
+                }
+            }
+        }
+    }
+
+    return $resized;
+}
+
+=head3 C<drop_collection( redis =E<gt> $server, name =E<gt> $name )>
+
+Use the C<drop_collection> to remove the entire collection.
+It can be called as either the existing C<Redis::CappedCollection> object method or a class function.
+If invoked as the class function C<drop_collection> uses mandatory C<redis> and C<name>
+arguments.
+These arguments are in key-value pairs.
+Arguments description match the arguments description for L</create> method.
+
+C<drop_collection> removes all the structures on the Redis server associated with
 the collection.
 After using C<drop_collection> you must explicitly recreate the collection.
 
 Before use, make sure that the collection is not being used by other customers.
 
-The following examples illustrate uses of the C<drop_collection> method:
+The following examples illustrate uses of the C<drop_collection>:
 
     $coll->drop_collection;
+    my $redis = Redis->new( redis => "$server:$port" );
+    Redis::CappedCollection::drop_collection( redis => $redis, name => 'Some name' );
 
 Warning: consider C<drop_collection> as a command that should only be used in production
 environments with extreme care. It may ruin performance when it is executed
@@ -2354,25 +2662,46 @@ against large databases.
 This command is intended for debugging and special operations.
 Don't use C<drop_collection> in your regular application code.
 
-Methods C<drop_collection> can cause an exception (C<confess>) if
+C<drop_collection> can cause an exception (C<confess>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
 
+An error will cause the program to halt (C<confess>) if an argument is not valid.
+
 =cut
 sub drop_collection {
-    my ( $self ) = @_;
+    my $ret;
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        my $self = shift;
 
-    $self->_set_last_errorcode( ENOERROR );
+        $self->_set_last_errorcode( ENOERROR );
 
-    my $ret = $self->_call_redis(
-        $self->_lua_script_cmd( 'drop_collection' ),
-        0,
-        $self->name,
-    );
+        $ret = $self->_call_redis(
+            $self->_lua_script_cmd( 'drop_collection' ),
+            0,
+            $self->name,
+        );
 
-    $self->_clear_name;
-    $self->_clear_size;
-    $self->_clear_sha1;
+        $self->_clear_name;
+        $self->_clear_size;
+        $self->_clear_sha1;
+    } else {
+        shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
+        my %arguments = @_;
+
+        confess "'redis' argument is required"  unless defined $arguments{redis};
+        confess "'name' argument is required"   unless defined $arguments{name};
+
+        my $redis   = _get_redis( $arguments{redis} );
+        my $name    = $arguments{name};
+
+        $ret = _call_redis(
+            $redis,
+            _lua_script_cmd( $redis, 'drop_collection' ),
+            0,
+            $name,
+        );
+    }
 
     return $ret;
 }
@@ -2501,25 +2830,56 @@ foreach my $attr_name ( qw(
     );
 }
 
-has '_lua_scripts'          => (
-    is          => 'ro',
-    isa         => 'HashRef[Str]',
-    lazy        => 1,
-    init_arg    => undef,
-    builder     => sub { return {}; },
-);
+my $_lua_scripts = {};
+
+#-- private functions ----------------------------------------------------------
+
+sub _make_data_key {
+    my ( $name ) = @_;
+    return( NAMESPACE.':D:'.$name );
+}
+
+sub _make_status_key {
+    my ( $name ) = @_;
+    return( NAMESPACE.':status:'.$name );
+}
+
+sub _get_redis {
+    my ( $server ) = @_;
+
+    my $redis;
+    if ( _INSTANCE( $server, 'Redis' ) ) {
+        $redis  = $server;
+    } else {
+        $redis  = _redis_constructor( $server );
+    }
+
+    return $redis;
+}
 
 #-- private methods ------------------------------------------------------------
 
 sub _lua_script_cmd {
-    my ( $self, $name ) = @_;
+    my ( $self, $redis );
+    if ( _INSTANCE( $_[0], __PACKAGE__ ) ) {    # allow calling $obj->bar
+        $self   = shift;
+        $redis  = $self->_redis;
+    } else {                                    # allow calling Foo::bar
+        $redis  = shift;
+    }
+    my $function_name = shift;
 
-    my $sha1 = $self->_lua_scripts->{ $name };
+    my $sha1 = $_lua_scripts->{ $redis }->{ $function_name };
     unless ( $sha1 ) {
-        $sha1 = $self->_lua_scripts->{ $name } = sha1_hex( $lua_script_body{ $name } );
-        unless ( ( $self->_call_redis( 'SCRIPT', 'EXISTS', $sha1 ) )[0] ) {
-            return( 'EVAL', $lua_script_body{ $name } );
+        $sha1 = $_lua_scripts->{ $redis }->{ $function_name } = sha1_hex( $lua_script_body{ $function_name } );
+        my $ret;
+        if ( $self ) {
+            $ret = ( $self->_call_redis( 'SCRIPT', 'EXISTS', $sha1 ) )[0];
+        } else {
+            $ret = ( _call_redis( $redis, 'SCRIPT', 'EXISTS', $sha1 ) )[0];
         }
+        return( 'EVAL', $lua_script_body{ $function_name } )
+            unless $ret;
     }
     return( 'EVALSHA', $sha1 );
 }
@@ -2560,27 +2920,33 @@ sub _throw {
 }
 
 sub _redis_exception {
-    my ( $self, $error ) = @_;
+    my $self;
+    $self = shift if _INSTANCE( $_[0], __PACKAGE__ );   # allow calling $obj->bar
+    my ( $error ) = @_;                                 # allow calling Foo::bar
 
-    # Use the error messages from Redis.pm
-    if (
-               $error =~ /^Could not connect to Redis server at /
-            || $error =~ /^Can't close socket: /
-            || $error =~ /^Not connected to any server/
-            # Maybe for pub/sub only
-            || $error =~ /^Error while reading from Redis server: /
-            || $error =~ /^Redis server closed connection/
-        ) {
-        $self->_set_last_errorcode( ENETWORK );
-    } elsif (
-               $error =~ /[\S+\s?]ERR command not allowed when used memory > 'maxmemory'/
-            || $error =~ /[\S+\s?]OOM command not allowed when used memory > 'maxmemory'/
-            || $error =~ /\[EVALSHA\] NOSCRIPT No matching script. Please use EVAL./
-        ) {
-        $self->_set_last_errorcode( EMAXMEMORYLIMIT );
-        $self->_clear_sha1;
+    if ( $self ) {
+        # Use the error messages from Redis.pm
+        if (
+                   $error =~ /^Could not connect to Redis server at /
+                || $error =~ /^Can't close socket: /
+                || $error =~ /^Not connected to any server/
+                # Maybe for pub/sub only
+                || $error =~ /^Error while reading from Redis server: /
+                || $error =~ /^Redis server closed connection/
+            ) {
+            $self->_set_last_errorcode( ENETWORK );
+        } elsif (
+                   $error =~ /[\S+\s?]ERR command not allowed when used memory > 'maxmemory'/
+                || $error =~ /[\S+\s?]OOM command not allowed when used memory > 'maxmemory'/
+                || $error =~ /\[EVALSHA\] NOSCRIPT No matching script. Please use EVAL./
+            ) {
+            $self->_set_last_errorcode( EMAXMEMORYLIMIT );
+            $self->_clear_sha1;
+        } else {
+            $self->_set_last_errorcode( EREDIS );
+        }
     } else {
-        $self->_set_last_errorcode( EREDIS );
+        # nothing to do now
     }
 
     die $error;
@@ -2589,21 +2955,28 @@ sub _redis_exception {
 sub _clear_sha1 {
     my ( $self ) = @_;
 
-    delete @{$self->_lua_scripts}{ keys %{$self->_lua_scripts} };
+    $_lua_scripts->{ $self->_redis } = {};
 }
 
 sub _redis_constructor {
-    my ( $self ) = @_;
+    my ( $self, $redis );
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        $self   = shift;
 
-    $self->_set_last_errorcode( ENOERROR );
-    my $redis;
-    try {
+        $self->_set_last_errorcode( ENOERROR );
+        try {
+            $redis = Redis->new(
+                server      => $self->_server,
+            );
+        } catch {
+            $self->_redis_exception( $_ );
+        };
+    } else {                                        # allow calling Foo::bar
+        my $server = shift;
         $redis = Redis->new(
-            server      => $self->_server,
-        )
-    } catch {
-        $self->_redis_exception( $_ );
-    };
+            server      => $server,
+        );
+    }
 
     return $redis;
 }
@@ -2614,17 +2987,28 @@ sub _redis_constructor {
 
 # Send a request to Redis
 sub _call_redis {
-    my $self        = shift;
-    my $method      = shift;
+    my ( $self, $redis );
+    if ( _INSTANCE( $_[0], __PACKAGE__ ) ) {    # allow calling $obj->bar
+        $self   = shift;
+        $redis  = $self->_redis;
+    } else {                                    # allow calling Foo::bar
+        $redis  = shift;
+    }
+    my $method  = shift;
 
-    $self->_set_last_errorcode( ENOERROR );
+    $self->_set_last_errorcode( ENOERROR ) if $self;
 
     my @return;
     my @args = @_;
     try {
-        @return = $self->_redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
+        @return = $redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
     } catch {
-        $self->_redis_exception( $_ );
+        my $error = $_;
+        if ( $self ) {
+            $self->_redis_exception( $error );
+        } else {
+            _redis_exception( $error );
+        }
     };
 
     return wantarray ? @return : $return[0];
@@ -2735,7 +3119,7 @@ The example shows a possible treatment for possible errors.
     my ( $list_id, $coll, @data );
 
     eval {
-        $coll = Redis::CappedCollection->new(
+        $coll = Redis::CappedCollection->create(
             redis   => DEFAULT_SERVER.':'.DEFAULT_PORT,
             name    => 'Some name',
             size    => 100_000,

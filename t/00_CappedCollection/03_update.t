@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -67,7 +67,7 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -117,7 +117,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":
 
 #-- resizing
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -150,7 +150,7 @@ is $coll->_call_redis( "HGET", $status_key, 'length' ), $tmp, "correct length va
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
 # limited size
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     size    => 10,
     );

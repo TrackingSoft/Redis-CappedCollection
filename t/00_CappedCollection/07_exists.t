@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -67,12 +67,18 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
+my $_redis = $coll->_redis;
+ok( $coll->collection_exists( name => $coll->name ), "collection exists: ".$coll->name );
+ok( Redis::CappedCollection::collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
+ok( Redis::CappedCollection->collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
+dies_ok { Redis::CappedCollection->create( $redis, name => $coll->name ) } 'expecting to die: collection '.$coll->name.' already exists';
+dies_ok { Redis::CappedCollection->collection_exists() } 'expecting to die';
 
 $status_key  = NAMESPACE.':status:'.$coll->name;
 $queue_key   = NAMESPACE.':queue:'.$coll->name;
@@ -91,6 +97,8 @@ for ( my $i = 1; $i <= 10; ++$i )
 }
 
 ok( $coll->exists( $_ ), "list exist: $_" ) for 1..10;
+ok( $coll->collection_exists( name => $coll->name ), "collection exists: ".$coll->name );
+ok( Redis::CappedCollection::collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
 
 # errors in the arguments
 
@@ -102,7 +110,11 @@ foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 }
 
 ok( $coll->exists( $_ ), "list exist: $_" ) for 1..10;
+ok( $coll->collection_exists( name => $coll->name ), "collection exists: ".$coll->name );
+ok( Redis::CappedCollection::collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+ok( !$coll->collection_exists( name => $coll->name ), "collection not exist: ".$coll->name );
+ok( !Redis::CappedCollection::collection_exists( redis => $_redis, name => $coll->name ), "collection not exist: ".$coll->name );
 
 }

@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -68,7 +68,7 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $i
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -82,11 +82,34 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 #-- all correct
 
+$info = Redis::CappedCollection::collection_info( redis => $coll->_redis, name => $coll->name );
+is $info->{size},               0,      "OK size";                      # defaulf
+is $info->{length},             0,      "OK length";
+is $info->{lists},              0,      "OK lists";
+is $info->{items},              0,      "OK items";
+is $info->{older_allowed},      0,      "OK older_allowed";             # default
+is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
+is $info->{oldest_time},        undef,  "OK items";
+
+$info = Redis::CappedCollection->collection_info( redis => $coll->_redis, name => $coll->name );
+is $info->{size},               0,      "OK size";                      # defaulf
+is $info->{length},             0,      "OK length";
+is $info->{lists},              0,      "OK lists";
+is $info->{items},              0,      "OK items";
+is $info->{older_allowed},      0,      "OK older_allowed";             # default
+is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
+is $info->{oldest_time},        undef,  "OK items";
+
 $info = $coll->collection_info;
-is $info->{length}, 0, "OK length";
-is $info->{lists},  0, "OK lists";
-is $info->{items},  0, "OK items";
-is $info->{oldest_time}, undef, "OK items";
+is $info->{size},               0,      "OK size";                      # defaulf
+is $info->{length},             0,      "OK length";
+is $info->{lists},              0,      "OK lists";
+is $info->{items},              0,      "OK items";
+is $info->{older_allowed},      0,      "OK older_allowed";             # default
+is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
+is $info->{oldest_time},        undef,  "OK items";
+
+dies_ok { Redis::CappedCollection->collection_info() } "expecting to die";
 
 # some inserts
 $len = 0;
@@ -95,16 +118,19 @@ for ( my $i = 1; $i <= 10; ++$i )
 {
     ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
     $info = $coll->collection_info;
-    is $info->{length}, $tmp,   "OK length";
-    is $info->{lists},  $i,     "OK lists";
-    is $info->{items},  $len,   "OK items";
-    ok $info->{oldest_time} > 0, "OK items";
+    is $info->{size},               0,      "OK size";                  # defaulf
+    is $info->{length},             $tmp,   "OK length";
+    is $info->{lists},              $i,     "OK lists";
+    is $info->{items},              $len,   "OK items";
+    is $info->{older_allowed},      0,      "OK older_allowed";         # defaulf
+    is $info->{big_data_threshold}, 0,      "OK big_data_threshold";    # defaulf
+    ok $info->{oldest_time}         > 0,    "OK items";
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
 # Remove old data (insert)
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     size    => 5,
     );
@@ -144,7 +170,7 @@ is $info->{items},  1,              "OK items";
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
 # limited size (update)
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     size    => 10,
     );
@@ -271,5 +297,20 @@ $info = $coll->collection_info;
 is $info->{length}, 10, "OK length";
 is $info->{lists},  1,  "OK lists";
 is $info->{items},  5,  "OK items";
+
+$info = $coll->collection_info;
+is $info->{size},               10,     "OK size";
+is $info->{older_allowed},      0,      "OK older_allowed";
+is $info->{big_data_threshold}, 0,      "OK big_data_threshold";
+ok $coll->resize( size => 20, older_allowed => 1, big_data_threshold => 100 ), 'resized';
+$info = $coll->collection_info;
+is $info->{size},               20,     "OK size";
+is $info->{older_allowed},      1,      "OK older_allowed";
+is $info->{big_data_threshold}, 100,    "OK big_data_threshold";
+dies_ok { $coll->resize() } "expecting to die";
+ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, size => 20, older_allowed => 0, big_data_threshold => 100 ), 'resized' );
+ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, size => 20, older_allowed => 0, big_data_threshold => 100 ), 'resized' );
+dies_ok { $coll->resize() } "expecting to die";
+dies_ok { Redis::CappedCollection->resize() } "expecting to die";
 
 }

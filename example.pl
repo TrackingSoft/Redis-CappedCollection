@@ -84,7 +84,7 @@ sub exception {
 my ( $id, $coll, @data );
 
 eval {
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         redis   => $server,
         name    => 'Some name', # If 'name' not specified, it creates
                         # a new collection named as $uuid->create_str

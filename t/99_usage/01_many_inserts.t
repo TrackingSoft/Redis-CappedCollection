@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::RedisServer";               ## no critic
     plan skip_all => "because Test::RedisServer required for testing" if $@;
 }
@@ -22,6 +17,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use Time::HiRes qw(
@@ -69,7 +69,7 @@ sub new_connect {
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
-    my $coll = Redis::CappedCollection->new(
+    my $coll = Redis::CappedCollection->create(
         $redis,
         size                    => MAX_SIZE,
         advance_cleanup_bytes   => $advance_cleanup_bytes,

@@ -15,7 +15,7 @@ my %config = (
     PREREQ_PM                   => {
         'Data::UUID'            => '1.217',
         'Digest::SHA1'          => '2.13',
-        'Mouse'                 => '0.97',
+        'Mouse'                 => '2.4.1',
         'Params::Util'          => '1.07',
         'Redis'                 => '1.976',
         'Try::Tiny'             => '0.18',
@@ -38,6 +38,14 @@ my %config = (
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
                 version                     => '0.17'
+            },
+        },
+        'meta-spec'             => { version => 2 },
+        resources               => {
+            repository              => {
+                type                    => 'git',
+                url                     => 'git://github.com/TrackingSoft/Redis-CappedCollection.git',
+                web                     => 'http://github.com/TrackingSoft/Redis-CappedCollection',
             },
         },
     },

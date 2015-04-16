@@ -15,11 +15,6 @@ BEGIN {
 }
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::RedisServer";               ## no critic
     plan skip_all => "because Test::RedisServer required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -83,7 +83,7 @@ sub new_connect {
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         $name ? ( 'name' => $name ) : (),
         );
@@ -117,7 +117,7 @@ $coll->drop_collection;
 
 foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         redis   => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
         name    => $arg,
         ) } "expecting to die: ".( $arg || '' );

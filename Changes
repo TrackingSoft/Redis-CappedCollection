@@ -1,7 +1,13 @@
 Revision history for Redis::CappedCollection module
 
-0.17  ??? ???  ?? 20??
+0.17  ??? Apr  ?? 2015
     CHANGES:
+    - Added 'create', 'open' constructors.
+    - Added 'collection_exists', 'resize' methods.
+    - 'open', 'collection_info', 'collection_exists', 'resize', 'drop_collection'
+      may be used as functions.
+    - Redis::CappedCollection->new() is deprecated and will be removed in future.
+      Please use either create() or open() instead.
     - The 'quit' method does not close connection to Redis during
       global destruction phase (Perl version 5.14 and above).
 

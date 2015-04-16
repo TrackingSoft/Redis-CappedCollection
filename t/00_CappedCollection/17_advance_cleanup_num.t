@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -82,9 +82,10 @@ sub new_connect {
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         $size ? ( 'size' => $size ) : (),
+        'older_allowed' => 1,
         $advance_cleanup_bytes ? ( 'advance_cleanup_bytes' => $advance_cleanup_bytes ) : (),
         $advance_cleanup_num   ? ( 'advance_cleanup_num'   => $advance_cleanup_num   ) : (),
         );
@@ -170,7 +171,7 @@ is "@arr", "** D E F G H I J", "correct value";
 
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         redis               => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
         advance_cleanup_num => $arg,
         ) } "expecting to die: ".( $arg || '' );

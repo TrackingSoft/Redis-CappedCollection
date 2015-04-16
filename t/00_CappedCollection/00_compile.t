@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 24;
+use Test::More tests => 25;
 
 BEGIN {
     eval 'use Test::NoWarnings';    ## no critic
@@ -17,6 +17,7 @@ BEGIN { use_ok 'Redis::CappedCollection' }
 
 can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     new
+    create
     insert
     update
     receive

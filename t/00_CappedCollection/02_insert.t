@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -69,7 +69,7 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -116,7 +116,7 @@ is( $tmp, 1, "data id correct" );
 is( $tmp, 2, "data id correct" );
 
 # errors in the arguments
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -201,7 +201,7 @@ dies_ok { $id = $coll->insert( "Some stuff", "Some id" ) } "expecting to die";
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
 # Remove old data
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     size    => 5,
     );
@@ -226,7 +226,7 @@ is scalar( @arr ), 4, "correct lists value";
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
 #-------------------------------------------------------------------------------
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     size    => 5,
     );

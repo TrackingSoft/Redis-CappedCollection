@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -104,7 +104,7 @@ my $msg = "attribute is set correctly";
 # all default
 
 # a class method
-$coll = Redis::CappedCollection->new( $exists_real_redis ? () : ( redis => $redis_addr ) );
+$coll = Redis::CappedCollection->create( $exists_real_redis ? () : ( redis => $redis_addr ) );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
@@ -124,12 +124,17 @@ is $coll->_call_redis( "HGET", $status_key, 'size'   ), $coll->size, "correct st
 is $coll->_call_redis( "HGET", $status_key, 'length' ), 0,           "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 0,           "correct status value";
 
-my $coll_1 = Redis::CappedCollection->new( $exists_real_redis ? () : ( redis => $redis_addr ) );
-my $coll_2 = Redis::CappedCollection->new( $exists_real_redis ? () : ( redis => $redis_addr ) );
+my $coll_1 = Redis::CappedCollection->create( $exists_real_redis ? () : ( redis => $redis_addr ) );
+my $coll_2 = Redis::CappedCollection->create( $exists_real_redis ? () : ( redis => $redis_addr ) );
 ok $coll_1->name ne $coll_2->name, "new UUID";
 
-# an object method
-$coll = $coll->new( $exists_real_redis ? () : ( redis => $redis_addr ) );
+my $open_coll1 = Redis::CappedCollection->open( redis => $coll_1->_redis, name => $coll_1->name );
+ok $open_coll1->name ne $coll_1->name, "correct UUID";
+my $open_coll2 = Redis::CappedCollection::open( redis => $coll_1->_redis, name => $coll_1->name );
+ok $open_coll2->name ne $coll_1->name, "correct UUID";
+dies_ok { Redis::CappedCollection->open() } "expecting to die";
+
+$coll = Redis::CappedCollection->create( $exists_real_redis ? () : ( redis => $redis_addr ) );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
@@ -149,28 +154,28 @@ my $redis2 = Redis->new(
     server => $redis_addr,
     );
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis2,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     redis => $redis_addr,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $coll,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     $redis,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -179,7 +184,7 @@ ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     name => $msg,
     $exists_real_redis ? () : ( redis => $redis_addr ),
     );
@@ -193,7 +198,7 @@ $coll->_call_redis( 'DEL',
     $coll->_call_redis( 'KEYS', NAMESPACE.':T:'.$coll->name.":*" ),
     );
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     size => 12345,
     $exists_real_redis ? () : ( redis => $redis_addr ),
     );
@@ -207,7 +212,7 @@ $coll->_call_redis( 'DEL',
     $coll->_call_redis( 'KEYS', NAMESPACE.':T:'.$coll->name.":*" ),
     );
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     max_datasize => 98765,
     $exists_real_redis ? () : ( redis => $redis_addr ),
     );
@@ -225,7 +230,7 @@ $coll->_call_redis( 'DEL',
 $tmp = $coll.'';
 foreach my $arg ( ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         $arg,
         ) } "expecting to die";
 }
@@ -234,7 +239,7 @@ is $coll.'', $tmp, "value has not changed";
 #$tmp = $coll.'';
 #foreach my $arg ( ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid ) )
 #{
-#    dies_ok { $coll = Redis::CappedCollection->new(
+#    dies_ok { $coll = Redis::CappedCollection->create(
 #        redis => $arg,
 #        ) } "expecting to die";
 #}
@@ -243,14 +248,14 @@ is $coll.'', $tmp, "value has not changed";
 $tmp = $coll.'';
 foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         redis   => $redis_addr,
         name    => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }
 is $coll.'', $tmp, "value has not changed";
 
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     redis   => $redis_addr,
     size    => 12345,
     );
@@ -262,13 +267,13 @@ $name = $coll->name;
 $coll->quit;
 $tmp = $coll.'';
 dies_ok {
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         redis   => $redis_addr,
         name    => $name,
         size    => 54321,
     ) } "expecting to die";
 is $coll.'', $tmp, "value has not changed";
-$coll = Redis::CappedCollection->new(
+$coll = Redis::CappedCollection->create(
     redis   => $redis_addr,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
@@ -277,7 +282,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":
 $tmp = $coll.'';
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         redis   => $redis_addr,
         size    => $arg,
         ) } "expecting to die: ".( $arg || '' );
@@ -287,7 +292,7 @@ foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 $tmp = $coll.'';
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll = Redis::CappedCollection->new(
+    dies_ok { $coll = Redis::CappedCollection->create(
         redis           => $redis_addr,
         max_datasize    => $arg,
         ) } "expecting to die: ".( $arg || '' );
@@ -304,7 +309,7 @@ $redis = get_redis( $redis, conf =>
 skip( $redis_error, 1 ) unless $redis;
 isa_ok( $redis, 'Test::RedisServer' );
 
-lives_ok { $coll = Redis::CappedCollection->new(
+lives_ok { $coll = Redis::CappedCollection->create(
     redis                   => DEFAULT_SERVER.":$port",
     advance_cleanup_bytes   => 1_000,
     ) } "expecting to live: size = 0, advance_cleanup_bytes > 0";

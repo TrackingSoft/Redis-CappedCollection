@@ -5,6 +5,5 @@ eval "$(perl -Mlocal::lib)"
 cpanm --installdeps .
 
 RELEASE_TESTS=1
-perl Makefile.PL && 		\
+perl Makefile.PL && \
 make test
-

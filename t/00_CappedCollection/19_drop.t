@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -70,7 +70,7 @@ my $msg = "attribute is set correctly";
 for my $big_data_threshold ( ( 0, 20 ) )
 {
 
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         name    => "Some name",
         big_data_threshold => $big_data_threshold,
@@ -114,7 +114,27 @@ for my $big_data_threshold ( ( 0, 20 ) )
     }
 
     $coll->drop_collection;
+    dies_ok { Redis::CappedCollection->open( redis => $coll->_redis, name => $coll->name ) } "expecting to die";
+    dies_ok { Redis::CappedCollection->collection_info( redis => $coll->_redis, name => $coll->name ) } "expecting to die";
 
 }
+
+$coll = Redis::CappedCollection->create( $redis );
+isa_ok( $coll, 'Redis::CappedCollection' );
+ok $coll->collection_exists, 'collection exists';
+Redis::CappedCollection->drop_collection( redis => $coll->_redis, name => $coll->name );
+ok !$coll->collection_exists, 'collection not exists';
+
+$coll = Redis::CappedCollection->create( $redis );
+isa_ok( $coll, 'Redis::CappedCollection' );
+ok $coll->collection_exists, 'collection exists';
+Redis::CappedCollection::drop_collection( redis => $coll->_redis, name => $coll->name );
+ok !$coll->collection_exists, 'collection not exists';
+
+$coll = Redis::CappedCollection->create( $redis );
+isa_ok( $coll, 'Redis::CappedCollection' );
+ok $coll->collection_exists, 'collection exists';
+dies_ok { Redis::CappedCollection->drop_collection() } "expecting to die";
+ok $coll->collection_exists, 'collection exists';
 
 }

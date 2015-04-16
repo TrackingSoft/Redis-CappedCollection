@@ -38,7 +38,7 @@
          "requires" : {
             "Data::UUID" : "1.217",
             "Digest::SHA1" : "2.13",
-            "Mouse" : "0.97",
+            "Mouse" : "2.4.1",
             "Params::Util" : "1.07",
             "Redis" : "1.976",
             "Try::Tiny" : "0.18",

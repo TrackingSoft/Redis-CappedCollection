@@ -10,11 +10,6 @@ use Test::More;
 plan "no_plan";
 
 BEGIN {
-    eval 'use Test::NoWarnings';                ## no critic
-    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-}
-
-BEGIN {
     eval "use Test::Exception";                 ## no critic
     plan skip_all => "because Test::Exception required for testing" if $@;
 }
@@ -27,6 +22,11 @@ BEGIN {
 BEGIN {
     eval "use Net::EmptyPort";                  ## no critic
     plan skip_all => "because Net::EmptyPort required for testing" if $@;
+}
+
+BEGIN {
+    eval 'use Test::NoWarnings';                ## no critic
+    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
 }
 
 use bytes;
@@ -71,9 +71,10 @@ my $msg = "attribute is set correctly";
 for my $big_data_threshold ( ( 0, 10 ) )
 {
 
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         big_data_threshold => $big_data_threshold,
+        'older_allowed' => 1,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
     ok $coll->_server =~ /.+:$port$/, $msg;
@@ -112,10 +113,11 @@ for my $big_data_threshold ( ( 0, 10 ) )
     $coll->drop_collection;
 
 # Remove old data (insert)
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         size    => 5,
         big_data_threshold => $big_data_threshold,
+        'older_allowed' => 1,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
     ok $coll->_server =~ /.+:$port$/, $msg;
@@ -148,9 +150,10 @@ for my $big_data_threshold ( ( 0, 10 ) )
     $coll->drop_collection;
 
 #----------
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         big_data_threshold => $big_data_threshold,
+        'older_allowed' => 1,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
     ok $coll->_server =~ /.+:$port$/, $msg;
@@ -172,10 +175,11 @@ for my $big_data_threshold ( ( 0, 10 ) )
     $coll->drop_collection;
 
 # Remove old data (insert)
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         size    => 5,
         big_data_threshold => $big_data_threshold,
+        'older_allowed' => 1,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
     ok $coll->_server =~ /.+:$port$/, $msg;

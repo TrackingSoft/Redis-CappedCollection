@@ -338,7 +338,7 @@ $big_data_threshold = 0 if $find_optimal;
 do
 {
     $redis->flushall if $dump;
-    $coll = Redis::CappedCollection->new(
+    $coll = Redis::CappedCollection->create(
         $redis,
         name            => $coll_name,
         $receive ? () : (
