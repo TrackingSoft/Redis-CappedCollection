@@ -1,6 +1,6 @@
 Revision history for Redis::CappedCollection module
 
-0.17  ??? Apr  ?? 2015
+0.17  Thu Apr  23 2015
     CHANGES:
     - Added 'create', 'open' constructors.
     - Added 'collection_exists', 'resize' methods.
