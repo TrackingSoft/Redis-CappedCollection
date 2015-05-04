@@ -3,6 +3,8 @@ abstract: 'Redis::CappedCollection module provides the fixed sized collections t
 author:
   - 'TrackingSoft LLC <sgladkov@trackingsoft.com>'
 test_requires:
+  Data::UUID: '1.217'
+  JSON::XS: '3.01'
   Net::EmptyPort: 0
   Test::Exception: 0.31
   Test::NoWarnings: 1.04
@@ -29,16 +31,16 @@ no_index:
 provides:
   Redis::CappedCollection:
     file: lib/Redis/CappedCollection.pm
-    version: 0.17
+    version: 1.00
 requires:
-  Data::UUID: 1.217
+  Const::Fast: 0.014
   Digest::SHA1: 2.13
   Mouse: '2.4.1'
   Params::Util: 1.07
   Redis: 1.976
   Try::Tiny: 0.18
   perl: 5.010
-version: 0.17
+version: 1.00
 resources:
   homepage: https://github.com/TrackingSoft/Redis-CappedCollection
   repository: git://github.com/TrackingSoft/Redis-CappedCollection.git

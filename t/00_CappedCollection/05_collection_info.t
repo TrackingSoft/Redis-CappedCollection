@@ -33,20 +33,8 @@ use bytes;
 use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $DATA_VERSION
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -69,247 +57,147 @@ my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 $coll = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
+    name    => $uuid->create_str,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 #-- all correct
 
 $info = Redis::CappedCollection::collection_info( redis => $coll->_redis, name => $coll->name );
-is $info->{size},               0,      "OK size";                      # defaulf
-is $info->{length},             0,      "OK length";
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
-is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
-is $info->{oldest_time},        undef,  "OK items";
+is $info->{oldest_time},        undef,  "OK oldest_time";
+is $info->{data_version},       $DATA_VERSION, 'OK data_version';
+
+$info = Redis::CappedCollection::collection_info( redis => { server => $coll->_server }, name => $coll->name );
+is $info->{lists},              0,      "OK lists";
+is $info->{items},              0,      "OK items";
+is $info->{older_allowed},      0,      "OK older_allowed";             # default
+is $info->{oldest_time},        undef,  "OK oldest_time";
+is $info->{data_version},       $DATA_VERSION, 'OK data_version';
 
 $info = Redis::CappedCollection->collection_info( redis => $coll->_redis, name => $coll->name );
-is $info->{size},               0,      "OK size";                      # defaulf
-is $info->{length},             0,      "OK length";
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
-is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
-is $info->{oldest_time},        undef,  "OK items";
+is $info->{oldest_time},        undef,  "OK oldest_time";
+is $info->{data_version},       $DATA_VERSION, 'OK data_version';
 
 $info = $coll->collection_info;
-is $info->{size},               0,      "OK size";                      # defaulf
-is $info->{length},             0,      "OK length";
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
-is $info->{big_data_threshold}, 0,      "OK big_data_threshold";        # default
-is $info->{oldest_time},        undef,  "OK items";
+is $info->{oldest_time},        undef,  "OK oldest_time";
+is $coll->oldest_time,          undef,  "OK oldest_time";
+is $info->{data_version},       $DATA_VERSION, 'OK data_version';
 
 dies_ok { Redis::CappedCollection->collection_info() } "expecting to die";
+
+my $data_id = 0;
 
 # some inserts
 $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
     $info = $coll->collection_info;
-    is $info->{size},               0,      "OK size";                  # defaulf
-    is $info->{length},             $tmp,   "OK length";
     is $info->{lists},              $i,     "OK lists";
     is $info->{items},              $len,   "OK items";
     is $info->{older_allowed},      0,      "OK older_allowed";         # defaulf
-    is $info->{big_data_threshold}, 0,      "OK big_data_threshold";    # defaulf
-    ok $info->{oldest_time}         > 0,    "OK items";
+    ok $info->{oldest_time}         > 0,    "OK oldest_time";
+    is $coll->oldest_time,          $info->{oldest_time},   "OK oldest_time";
 }
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( 'HDEL', $status_key, 'data_version' );
+$info = $coll->collection_info;
+is $info->{data_version}, '0', 'OK data_version';
+
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 # Remove old data (insert)
 $coll = Redis::CappedCollection->create(
-    $redis,
-    size    => 5,
+    redis   => $redis,
+    name    => $uuid->create_str,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
-$status_key  = NAMESPACE.':status:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
 
-$list_key = NAMESPACE.':D:*';
-foreach my $i ( 1..( $coll->size * 2 ) )
+$list_key = $NAMESPACE.':D:*';
+foreach my $i ( 1..10 )
 {
-    $id = $coll->insert( '*', $i );
+    $data_id = 0;
+    $id = $coll->insert( $i, $data_id++, '*' );
     $info = $coll->collection_info;
-    is $info->{length}, ( $i <= $coll->size ) ? $i : $coll->size, "OK length";
-    is $info->{lists},  ( $i <= $coll->size ) ? $i : $coll->size, "OK lists";
-    is $info->{items},  ( $i <= $coll->size ) ? $i : $coll->size, "OK items";
+    is $info->{lists},  $i, "OK lists";
+    is $info->{items},  $i, "OK items";
 }
 
-$id = $coll->insert( '*' x $coll->size );
-$tmp = $coll->_call_redis( "HGET", $status_key, 'length' );
+$data_id = 0;
+$id = $coll->insert( 'List id', $data_id++, '*****' );
 @arr = $coll->_call_redis( "KEYS", $list_key );
-is $tmp, $coll->size, "correct length value";
-is scalar( @arr ), 1, "correct lists value";
+is scalar( @arr ), 11, "correct lists value";
 
 $info = $coll->collection_info;
-is $info->{length}, $coll->size,    "OK length";
-is $info->{lists},  1,              "OK lists";
-is $info->{items},  1,              "OK items";
+is $info->{lists},  11,              "OK lists";
+is $info->{items},  11,              "OK items";
 
-dies_ok { $id = $coll->insert( '*' x ( $coll->size + 1 ) ) } "expecting to die";
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
-$info = $coll->collection_info;
-is $info->{length}, $coll->size,    "OK length";
-is $info->{lists},  1,              "OK lists";
-is $info->{items},  1,              "OK items";
-
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
-
-# limited size (update)
 $coll = Redis::CappedCollection->create(
-    $redis,
-    size    => 10,
+    redis   => $redis,
+    name    => $uuid->create_str,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
-$coll->insert( $_, "id", undef, gettimeofday + 0 ) for 1..9;
-$list_key = NAMESPACE.':D:'.$coll->name.':id';
+$data_id = 0;
+$coll->insert( "id", $data_id++, $_, gettimeofday + 0 ) for 1..9;
+$list_key = $NAMESPACE.':D:'.$coll->name.':id';
 is $coll->_call_redis( "HLEN", $list_key ), 9, "correct list length";
-is $coll->_call_redis( "HGET", $status_key, 'length' ), 9, "correct length value";
 
 $info = $coll->collection_info;
-is $info->{length}, 9, "OK length";
 is $info->{lists},  1, "OK lists";
 is $info->{items},  9, "OK items";
-
-$tmp = 0;
-# 9 = 1  2  3  4  5  6  7  8  9
-foreach my $i ( 1..9 )
-{
-    my $tm = $coll->collection_info->{oldest_time};
-    $tmp = $coll->update( "id", $i - 1, "$i*" );
-    if ( $i == 1 )
-    {
-        # 10 = 1* 2  3  4  5  6  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 10, "OK length";
-        is $info->{lists},  1,  "OK lists";
-        is $info->{items},  9,  "OK items";
-    }
-    elsif ( $i == 2 )
-    {
-        # 9 = 2* 3  4  5  6  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 9, "OK length";
-        is $info->{lists},  1, "OK lists";
-        is $info->{items},  8, "OK items";
-        ok $info->{oldest_time} > $tm, "OK oldest time";
-    }
-    elsif ( $i == 3 )
-    {
-        # 10 = 2* 3* 4  5  6  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 10, "OK length";
-        is $info->{lists},  1,  "OK lists";
-        is $info->{items},  8,  "OK items";
-    }
-    elsif ( $i == 4 )
-    {
-        # 9 = 3* 4* 5  6  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 9, "OK length";
-        is $info->{lists},  1, "OK lists";
-        is $info->{items},  7, "OK items";
-    }
-    elsif ( $i == 5 )
-    {
-        # 10 = 3* 4* 5*  6  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 10, "OK length";
-        is $info->{lists},  1,  "OK lists";
-        is $info->{items},  7,  "OK items";
-    }
-    elsif ( $i == 6 )
-    {
-        # 9 = 4* 5* 6*  7  8  9
-        ok $tmp, "OK update $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 9, "OK length";
-        is $info->{lists},  1, "OK lists";
-        is $info->{items},  6, "OK items";
-    }
-    elsif ( $i == 7 )
-    {
-        # 10 = 4* 5* 6* 7*  8  9
-        ok $tmp, "not updated $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 10, "OK length";
-        is $info->{lists},  1,  "OK lists";
-        is $info->{items},  6,  "OK items";
-    }
-    elsif ( $i == 8 )
-    {
-        # 9 = 5* 6* 7* 8*  9
-        ok $tmp, "not updated $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 9, "OK length";
-        is $info->{lists},  1, "OK lists";
-        is $info->{items},  5, "OK items";
-    }
-    elsif ( $i == 9 )
-    {
-        # 10 = 5* 6* 7* 8* 9*
-        ok $tmp, "not updated $i";
-        $info = $coll->collection_info;
-        is $info->{length}, 10, "OK length";
-        is $info->{lists},  1,  "OK lists";
-        is $info->{items},  5,  "OK items";
-        last;
-    }
-}
 
 $tmp = $coll->update( "bad_id", 0, '*' );
 ok !$tmp, "not updated";
 $info = $coll->collection_info;
-is $info->{length}, 10, "OK length";
 is $info->{lists},  1,  "OK lists";
-is $info->{items},  5,  "OK items";
+is $info->{items},  9,  "OK items";
 
 $tmp = $coll->update( "id", 0, '***' );
-ok !$tmp, "not updated";
+ok $tmp, "not updated";
 $info = $coll->collection_info;
-is $info->{length}, 10, "OK length";
 is $info->{lists},  1,  "OK lists";
-is $info->{items},  5,  "OK items";
+is $info->{items},  9,  "OK items";
 
 $info = $coll->collection_info;
-is $info->{size},               10,     "OK size";
 is $info->{older_allowed},      0,      "OK older_allowed";
-is $info->{big_data_threshold}, 0,      "OK big_data_threshold";
-ok $coll->resize( size => 20, older_allowed => 1, big_data_threshold => 100 ), 'resized';
+ok $coll->resize( size => 20, older_allowed => 1 ), 'resized';
 $info = $coll->collection_info;
-is $info->{size},               20,     "OK size";
 is $info->{older_allowed},      1,      "OK older_allowed";
-is $info->{big_data_threshold}, 100,    "OK big_data_threshold";
 dies_ok { $coll->resize() } "expecting to die";
-ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, size => 20, older_allowed => 0, big_data_threshold => 100 ), 'resized' );
-ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, size => 20, older_allowed => 0, big_data_threshold => 100 ), 'resized' );
+ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
+ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
 dies_ok { $coll->resize() } "expecting to die";
 dies_ok { Redis::CappedCollection->resize() } "expecting to die";
 

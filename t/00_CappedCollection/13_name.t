@@ -32,20 +32,9 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $DEFAULT_SERVER
+    $DEFAULT_PORT
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -72,9 +61,9 @@ my $msg = "attribute is set correctly";
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $redis = get_redis( $redis, conf =>
+    $redis = get_redis( conf =>
         {
-            port                => Net::EmptyPort::empty_port( DEFAULT_PORT ),
+            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
             maxmemory           => 0,
 #            "vm-enabled"        => 'no',
             "maxmemory-policy"  => 'noeviction',
@@ -84,15 +73,15 @@ sub new_connect {
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->create(
-        $redis,
-        $name ? ( 'name' => $name ) : (),
+        redis   => $redis,
+        $name ? ( 'name' => $name ) : ( name => $uuid->create_str ),
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
 
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
+    $queue_key   = $NAMESPACE.':Q:'.$coll->name;
     ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
@@ -103,10 +92,12 @@ is bytes::length( $coll->name ), bytes::length( '89116152-C5BD-11E1-931B-0A690A9
 $tmp = $coll->drop_collection;
 is $tmp, 1, "correct";
 
+my $data_id = 0;
+
 new_connect();
-$coll->insert( '*');
+$coll->insert( 'List id', $data_id++, '*' );
 $tmp = $coll->drop_collection;
-is $tmp, 5, "correct";
+is $tmp, 3, "correct";  # S Q D
 
 $name = $msg;
 new_connect();
@@ -118,7 +109,7 @@ $coll->drop_collection;
 foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis   => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
+        redis   => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
         name    => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }

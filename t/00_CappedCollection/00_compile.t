@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 25;
+use Test::More tests => 24;
 
 BEGIN {
     eval 'use Test::NoWarnings';    ## no critic
@@ -22,24 +22,23 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     update
     receive
     collection_info
-    info
+    list_info
+    oldest_time
     pop_oldest
-    exists
+    list_exists
     lists
     drop_collection
-    drop
+    drop_list
     ping
     quit
 
     max_datasize
     last_errorcode
     name
-    size
     advance_cleanup_bytes
     advance_cleanup_num
     older_allowed
-    big_data_threshold
     );
 
 my $val;
-ok( $val = Redis::CappedCollection::MAX_DATASIZE, "import OK: $val" );
+ok( $val = $Redis::CappedCollection::MAX_DATASIZE, "import OK: $val" );

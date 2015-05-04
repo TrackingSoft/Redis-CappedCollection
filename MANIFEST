@@ -6,6 +6,8 @@ README                              Get you started with this package
 lib/Redis/CappedCollection.pm
 benchmark_capped.pl                 Redis::CappedCollection benchmark
 example.pl                          Redis::CappedCollection demonstration
+dump_collection                     Dump collection data
+restore_collection                  Restore collection data
 t/00_compile.t
 t/00_CappedCollection/00_compile.t
 t/00_CappedCollection/01_new.t
@@ -23,7 +25,6 @@ t/00_CappedCollection/12_last_errorcode.t
 t/00_CappedCollection/13_name.t
 t/00_CappedCollection/14_size.t
 t/00_CappedCollection/15_advance_cleanup_bytes.t
-t/00_CappedCollection/16_big_data_threshold.t
 t/00_CappedCollection/17_advance_cleanup_num.t
 t/00_CappedCollection/18_info.t
 t/00_CappedCollection/19_drop.t

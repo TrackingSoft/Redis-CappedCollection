@@ -1,8 +1,9 @@
-Redis::CappedCollection package version 0.16
+Redis::CappedCollection package version 1.00
 ============================================
 
 Redis::CappedCollection module provides fixed sized collections that have
-an auto-FIFO age-out feature.
+an auto-FIFO age-out feature. Collection size is determined by Redis server
+'maxmemory' setting.
 
 The Redis::CappedCollection package was written, tested, and found working on
 recent Linux distributions.
@@ -18,13 +19,12 @@ To install this package type the following:
 
 DEPENDENCIES
 
-In order to install and use this package you will need Perl version
-5.010 or better. The Redis::CappedCollection module depends on other
-packages that are distributed separately from Perl. We recommend that
-you have the following packages installed before you install
-Redis::CappedCollection :
+Perl version 5.010 or better is needed in order to install and use this package.
+The Redis::CappedCollection module depends on other packages that are distributed
+separately from Perl. We recommend that you have the following packages installed
+before you install Redis::CappedCollection :
 
-   Data::UUID
+   Const::Fast
    Digest::SHA1
    Mouse
    Params::Util
@@ -33,6 +33,8 @@ Redis::CappedCollection :
 
 The Redis::CappedCollection module has the following optional dependencies:
 
+   Data::UUID
+   JSON::XS
    Net::EmptyPort
    Test::Exception
    Test::NoWarnings
@@ -40,13 +42,21 @@ The Redis::CappedCollection module has the following optional dependencies:
 
 If the optional modules are missing, some "prereq" tests are skipped.
 
-The installation of the missing dependencies can either be accomplished
+The installation of the missing dependencies can be accomplished either
 through your OS package manager or through CPAN (or downloading the source
 for all dependencies and compiling them manually).
 
 TESTING
 
-A started Redis server is required before launching tests.
+A running Redis server is required before launching tests.
+
+We strongly recommend setting 'maxmemory' option in the redis.conf file.
+
+TODO
+
+Implement tests for
+- memory errors handling (working with internal ROLLBACK commands).
+- working with maxmemory = 0 in the redis.conf file.
 
 SIMPLE BENCHMARK
 
@@ -66,7 +76,7 @@ The basic operation of the Redis::CappedCollection package module:
 
 COPYRIGHT AND LICENCE
 
-Copyright (C) 2012-2013 by TrackingSoft LLC.
+Copyright (C) 2012-2015 by TrackingSoft LLC.
 
 This package is free software; you can redistribute it and/or modify it under
 the same terms as Perl itself. See perlartistic at

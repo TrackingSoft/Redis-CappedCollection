@@ -18,8 +18,8 @@ use Test::RedisServer;
 use Try::Tiny;
 
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
+    $DEFAULT_SERVER
+    $DEFAULT_PORT
 );
 
 sub get_redis
@@ -42,7 +42,7 @@ sub get_redis
     }
     return if $error;
 
-    return $redis;
+    return wantarray ? ( $redis, $error ) : $redis;
 }
 
 sub verify_redis
@@ -50,14 +50,14 @@ sub verify_redis
     my $redis;
     my $real_redis;
     my $skip_msg;
-    my $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
+    my $port = Net::EmptyPort::empty_port( $DEFAULT_PORT );
 
     $redis = get_redis( conf => { port => $port }, timeout => 3 );
     if ( $redis )
     {
-        eval { $real_redis = Redis->new( server => DEFAULT_SERVER.":".$port ) };
+        eval { $real_redis = Redis->new( server => $DEFAULT_SERVER.":".$port ) };
         $skip_msg = "Redis server is unavailable" unless ( !$@ && $real_redis && $real_redis->ping );
-        $skip_msg = "Need a Redis server version 2.6 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
+        $skip_msg = "Need a Redis server version 2.8 or higher" if ( !$skip_msg && !eval { return $real_redis->eval( 'return 1', 0 ) } );
         $real_redis->quit if $real_redis;
     }
     else

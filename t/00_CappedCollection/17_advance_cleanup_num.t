@@ -32,20 +32,9 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $DEFAULT_SERVER
+    $DEFAULT_PORT
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -65,16 +54,18 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $status_key, $queue_key, $size, $advance_cleanup_bytes, $advance_cleanup_num, $maxmemory, @arr, $info );
+my ( $coll, $name, $tmp, $status_key, $queue_key, $advance_cleanup_bytes, $advance_cleanup_num, $maxmemory, @arr, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
+
+my $data_id = 0;
 
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $redis = get_redis( $redis, conf =>
+    $redis = get_redis( conf =>
         {
-            port                => Net::EmptyPort::empty_port( DEFAULT_PORT ),
+            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
             maxmemory           => $maxmemory,
             "maxmemory-policy"  => 'noeviction',
             "maxmemory-samples" => 100,
@@ -82,9 +73,11 @@ sub new_connect {
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
+    $data_id = 0;
+
     $coll = Redis::CappedCollection->create(
-        $redis,
-        $size ? ( 'size' => $size ) : (),
+        redis   => $redis,
+        name    => $uuid->create_str,
         'older_allowed' => 1,
         $advance_cleanup_bytes ? ( 'advance_cleanup_bytes' => $advance_cleanup_bytes ) : (),
         $advance_cleanup_num   ? ( 'advance_cleanup_num'   => $advance_cleanup_num   ) : (),
@@ -93,86 +86,64 @@ sub new_connect {
 
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
+    $queue_key   = $NAMESPACE.':Q:'.$coll->name;
     ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
 
-$advance_cleanup_num = $size = 0;
+$advance_cleanup_num = 0;
 $maxmemory = 0;
 new_connect();
 is $coll->advance_cleanup_num, 0, $msg;
 $coll->drop_collection;
 
-$size = 100_000;
 $advance_cleanup_num = 5;
 new_connect();
 is $coll->advance_cleanup_num, $advance_cleanup_num, $msg;
 $coll->drop_collection;
 
-$advance_cleanup_bytes = $size = 0;
+$advance_cleanup_bytes = 0;
 $maxmemory = 0;
 new_connect();
 is $coll->advance_cleanup_bytes, 0, $msg;
 $coll->drop_collection;
 
-$size = 100_000;
 $advance_cleanup_bytes = 50_000;
 new_connect();
 is $coll->advance_cleanup_bytes, $advance_cleanup_bytes, $msg;
 
-$coll->insert( '*' x 10_000 ) for 1..10;
-is $coll->collection_info->{length}, 100_000, "correct value";
+$coll->insert( 'List id', $data_id++, '*' x 10_000 ) for 1..10;
 
-$coll->advance_cleanup_num( 3 );
+$coll->resize( advance_cleanup_num => 3 );
 
 $name = 'TEST';
-( $name, $tmp ) = $coll->insert( '*', $name );
+$tmp = $data_id;
+$coll->insert( $name, $data_id++, '*' );
 $info = $coll->collection_info;
-is $info->{length}, 70_001, "correct value";
-is $info->{items}, 8, "correct value";
+is $info->{items}, 11, "correct value";
 
-$coll->insert( '*' x 10_000, $name );
+$coll->insert( $name, $data_id++, '*' x 10_000 );
 $info = $coll->collection_info;
-is $info->{length}, 80_001, "correct value";
-is $info->{items}, 9, "correct value";
+is $info->{items}, 12, "correct value";
 
 $coll->update( $name, $tmp, '*' x 10_000 );
 $info = $coll->collection_info;
-is $info->{length}, 90_000, "correct value";
 
-$coll->insert( '*' x 10_000, $name );
+$coll->insert( $name, $data_id++, '*' x 10_000 );
 $info = $coll->collection_info;
-is $info->{length}, 100_000, "correct value";
 
-$coll->advance_cleanup_num( 6 );
-
-$name = 'TEST';
-( $name, $tmp ) = $coll->insert( '*', $name );
-$info = $coll->collection_info;
-is $info->{length}, 40_001, "correct value";
-is $info->{items}, 5, "correct value";
+$coll->resize( advance_cleanup_num => 6 );
 
 $coll->drop_collection;
 
-$size = 10;
-$advance_cleanup_bytes = 5;
-$advance_cleanup_num   = 3;
 new_connect();
-
-$tmp = 'A';
-$coll->insert( $tmp++, $name ) for 1..10;
-@arr = $coll->receive( $name );
-is "@arr", "A B C D E F G H I J", "correct value";
-$coll->insert( '**', $name );
-@arr = sort $coll->receive( $name );
-is "@arr", "** D E F G H I J", "correct value";
 
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis               => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
+        redis               => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        name                => $uuid->create_str,
         advance_cleanup_num => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }

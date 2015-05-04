@@ -13,7 +13,7 @@ my %config = (
     MIN_PERL_VERSION            => '5.010',
 # more to the list $Module::CoreList::version{5.010}
     PREREQ_PM                   => {
-        'Data::UUID'            => '1.217',
+        'Const::Fast'           => '0.014',
         'Digest::SHA1'          => '2.13',
         'Mouse'                 => '2.4.1',
         'Params::Util'          => '1.07',
@@ -21,6 +21,8 @@ my %config = (
         'Try::Tiny'             => '0.18',
         },
     TEST_REQUIRES               => {
+        'Data::UUID'            => '1.217',
+        'JSON::XS'              => '3.01',
         'Net::EmptyPort'        => '0',
         'Test::Exception'       => '0.31',
         'Test::NoWarnings'      => '1.04',
@@ -37,7 +39,7 @@ my %config = (
         provides                => {
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
-                version                     => '0.17'
+                version                     => '1.00'
             },
         },
         'meta-spec'             => { version => 2 },

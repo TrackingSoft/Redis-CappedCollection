@@ -23,6 +23,8 @@
    "prereqs" : {
       "test" : {
          "requires" : {
+            "Data::UUID" : "1.217",
+            "JSON::XS" : "3.01",
             "Net::EmptyPort" : "0",
             "Test::Exception" : "0.31",
             "Test::NoWarnings" : "1.04",
@@ -36,7 +38,7 @@
       },
       "runtime" : {
          "requires" : {
-            "Data::UUID" : "1.217",
+            "Const::Fast" : "0.014",
             "Digest::SHA1" : "2.13",
             "Mouse" : "2.4.1",
             "Params::Util" : "1.07",
@@ -49,11 +51,11 @@
    "provides" : {
       "Redis::CappedCollection" : {
          "file" : "lib/Redis/CappedCollection.pm",
-         "version" : "0.17"
+         "version" : "1.00"
       }
    },
    "release_status" : "stable",
-   "version" : "0.17",
+   "version" : "1.00",
    "resources" : {
       "repository" : {
          "type" : "git",

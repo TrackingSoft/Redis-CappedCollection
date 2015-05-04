@@ -32,21 +32,20 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
+    $DEFAULT_PORT
+    $NAMESPACE
 
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $ENOERROR
+    $EMISMATCHARG
+    $EDATATOOLARGE
+    $ENETWORK
+    $EMAXMEMORYLIMIT
+    $ECOLLDELETED
+    $EREDIS
+    $EDATAIDEXISTS
+    $EOLDERTHANALLOWED
     );
+use Time::HiRes;
 
 use Redis::CappedCollection::Test::Utils qw(
     get_redis
@@ -64,15 +63,15 @@ SKIP: {
 
 # For Test::RedisServer
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $size, $older_allowed, $info );
+my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $older_allowed, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $port = Net::EmptyPort::empty_port( DEFAULT_PORT );
-    $redis = get_redis( $redis, conf =>
+    $port = Net::EmptyPort::empty_port( $DEFAULT_PORT );
+    $redis = get_redis( conf =>
         {
             port                => $port,
             maxmemory           => $maxmemory,
@@ -84,8 +83,8 @@ sub new_connect {
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->create(
-        $redis,
-        $size ? ( size  => $size ) : (),
+        redis           => $redis,
+        name            => $uuid->create_str,
         older_allowed   => $older_allowed,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
@@ -93,17 +92,18 @@ sub new_connect {
     ok $coll->_server =~ /.+:$port$/, $msg;
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
+    $queue_key   = $NAMESPACE.':Q:'.$coll->name;
     ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
 
 $maxmemory = 0;
 $policy = "noeviction";
-$size = 0;
 $older_allowed = 1;
 new_connect();
+
+my $data_id = 0;
 
 #-- all correct
 
@@ -112,22 +112,22 @@ $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 #-- ENOERROR
 
-is $coll->last_errorcode, ENOERROR, "ENOERROR";
+is $coll->last_errorcode, $ENOERROR, "ENOERROR";
 note '$@: ', $@;
 
 #-- EMISMATCHARG
 
 eval { $coll->insert() };
-is $coll->last_errorcode, EMISMATCHARG, "EMISMATCHARG";
+is $coll->last_errorcode, $EMISMATCHARG, "EMISMATCHARG";
 note '$@: ', $@;
 
 #-- EDATATOOLARGE
@@ -137,8 +137,8 @@ my $max_datasize = 100;
 $coll->max_datasize( $max_datasize );
 is $coll->max_datasize, $max_datasize, $msg;
 
-eval { $id = $coll->insert( '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, EDATATOOLARGE, "EDATATOOLARGE";
+eval { $id = $coll->insert( 'List id', $data_id++, '*' x ( $max_datasize + 1 ) ) };
+is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
 note '$@: ', $@;
 $coll->max_datasize( $prev_max_datasize );
 
@@ -147,7 +147,7 @@ $coll->max_datasize( $prev_max_datasize );
 $coll->quit;
 
 eval { $info = $coll->collection_info };
-is $coll->last_errorcode, ENETWORK, "ENETWORK";
+is $coll->last_errorcode, $ENETWORK, "ENETWORK";
 note '$@: ', $@;
 ok !$coll->_redis->ping, "server is not available";
 
@@ -163,10 +163,10 @@ new_connect();
     $tmp = '*' x 1024;
     for ( my $i = 0; $i < 2 * 1024; ++$i )
     {
-        eval { $id = $coll->insert( $tmp, $i.'' ) };
+        eval { $id = $coll->insert( $i.'', $data_id++, $tmp ) };
         if ( $@ )
         {
-            is $coll->last_errorcode, EMAXMEMORYLIMIT, "EMAXMEMORYLIMIT";
+            is $coll->last_errorcode, $EMAXMEMORYLIMIT, "EMAXMEMORYLIMIT";
             note "($i)", '$@: ', $@;
             last;
         }
@@ -194,59 +194,60 @@ new_connect();
 #    $policy = "volatile-ttl";       # -> remove the key with the nearest expire time (minor TTL)
     $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
 
+    $maxmemory = 2 * 1024 * 1024;
+    $older_allowed = 1;
     new_connect();
-    $status_key  = NAMESPACE.':status:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
 
-    $id = $coll->insert( '*' x 1024 );
+    $id = $coll->insert( 'Other List id', $data_id++, '*' x 1024, Time::HiRes::time );
     $coll->_call_redis( 'DEL', $status_key );
-    eval { $id = $coll->insert( '*' x 1024 ) };
+    eval { $id = $coll->insert( 'Next List id', $data_id++, '*' x 1024, Time::HiRes::time ) };
     ok $@, "exception";
-    is $coll->last_errorcode, ECOLLDELETED, "ECOLLDELETED";
+    is $coll->last_errorcode, $ECOLLDELETED, "ECOLLDELETED";
     note '$@: ', $@;
     $coll->drop_collection;
 
 #-- EREDIS
 
 eval { $coll->_call_redis( "BADTHING", "Anything" ) };
-is $coll->last_errorcode, EREDIS, "EREDIS";
+is $coll->last_errorcode, $EREDIS, "EREDIS";
 note '$@: ', $@;
 
 #-- EDATAIDEXISTS
 
 new_connect();
-$id = $coll->insert( '*' x 1024, "Some id", 123 );
-eval { $id = $coll->insert( '*' x 1024, "Some id", 123 ) };
-is $coll->last_errorcode, EDATAIDEXISTS, "EDATAIDEXISTS";
+$id = $coll->insert( "Some id", 123, '*' x 1024 );
+eval { $id = $coll->insert( "Some id", 123, '*' x 1024 ) };
+is $coll->last_errorcode, $EDATAIDEXISTS, "EDATAIDEXISTS";
 note '$@: ', $@;
 
 #-- EOLDERTHANALLOWED
 
-$size = 5;
 new_connect();
 
-$list_key = NAMESPACE.':D:*';
-foreach my $i ( 1..( $coll->size * 2 ) )
+$list_key = $NAMESPACE.':D:*';
+foreach my $i ( 1..( 10 ) )
 {
-    $id = $coll->insert( $i, "Some id", $i, $i );
+    $id = $coll->insert( "Some id", $i, $i, $i );
 }
-eval { $id = $coll->insert( '*', "Some id", 123, 1 ) };
-is $coll->last_errorcode, ENOERROR, "ENOERROR";
+eval { $id = $coll->insert( "Some id", 123, '*', 1 ) };
+is $coll->last_errorcode, $ENOERROR, "ENOERROR";
 note '$@: ', $@;
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 $older_allowed = 0;
 new_connect();
 
-$list_key = NAMESPACE.':D:*';
-foreach my $i ( 1..( $coll->size * 2 ) )
+$list_key = $NAMESPACE.':D:*';
+foreach my $i ( 2..11 )
 {
-    $id = $coll->insert( $i, "Some id", $i, $i );
+    $id = $coll->insert( "Some id", $i, $i, $i );
 }
-eval { $id = $coll->insert( '*', "Some id", 123, 1 ) };
-is $coll->last_errorcode, EOLDERTHANALLOWED, "EOLDERTHANALLOWED";
+eval { $id = $coll->insert( "Some id", 123, '*', 1 ) };
+is $coll->last_errorcode, $EOLDERTHANALLOWED, "EOLDERTHANALLOWED";
 note '$@: ', $@;
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 }

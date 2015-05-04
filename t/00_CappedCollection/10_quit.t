@@ -32,20 +32,7 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -63,37 +50,36 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info, $size );
+my ( $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
-$size = 1_000_000;
 my $coll_1 = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
     name    => "Some name",
-    size    => $size,
     );
 isa_ok( $coll_1, 'Redis::CappedCollection' );
 ok $coll_1->_server =~ /.+:$port$/, $msg;
 ok ref( $coll_1->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll_1->name;
-$queue_key   = NAMESPACE.':queue:'.$coll_1->name;
+$status_key  = $NAMESPACE.':S:'.$coll_1->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll_1->name;
 ok $coll_1->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll_1->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 is $coll_1->name, "Some name",    "correct collection name";
-is $coll_1->size, $size,      "correct size";
+
+my $data_id = 0;
 
 # some inserts
 $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll_1->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll_1->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll_1->collection_info;
-is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
@@ -104,33 +90,29 @@ $coll_1->quit;
 ok !$coll_1->_redis->ping, "no server";
 
 my $coll_2 = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
     name    => "Some new name",
-    size    => $size,
     );
 isa_ok( $coll_2, 'Redis::CappedCollection' );
 ok $coll_2->_server =~ /.+:$port$/, $msg;
 ok ref( $coll_2->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll_2->name;
-$queue_key   = NAMESPACE.':queue:'.$coll_2->name;
+$status_key  = $NAMESPACE.':S:'.$coll_2->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll_2->name;
 ok $coll_2->_call_redis( "EXISTS", $status_key ), "status hash exists";
 ok !$coll_2->_call_redis( "EXISTS", $queue_key ), "queue list exists";
 
 is $coll_2->name, "Some new name", "correct collection name";
-is $coll_2->size, $size,      "correct size";
 
 $info = $coll_2->collection_info;
-is $info->{length}, 0, "OK length - $info->{length}";
 is $info->{lists},  0, "OK lists - $info->{lists}";
 is $info->{items},  0, "OK queue length - $info->{items}";
 
 #-- ping
 
 my $coll_3 = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
     name    => "Some next name",
-    size    => $size,
     );
 isa_ok( $coll_3, 'Redis::CappedCollection' );
 

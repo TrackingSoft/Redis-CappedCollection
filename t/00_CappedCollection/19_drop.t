@@ -31,22 +31,7 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
-use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
-    );
+use Redis::CappedCollection ();
 
 use Redis::CappedCollection::Test::Utils qw(
     verify_redis
@@ -63,17 +48,19 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $info );
+my ( $coll, $name, $tmp, $id, $list_key, @arr, $len, $info );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
+
+my $data_id = 0;
 
 for my $big_data_threshold ( ( 0, 20 ) )
 {
 
     $coll = Redis::CappedCollection->create(
-        $redis,
-        name    => "Some name",
-        big_data_threshold => $big_data_threshold,
+        redis               => $redis,
+        name                => "Some name",
+        big_data_threshold  => $big_data_threshold,
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
     ok $coll->_server =~ /.+:$port$/, $msg;
@@ -86,29 +73,29 @@ for my $big_data_threshold ( ( 0, 20 ) )
 # some inserts
     $len = 0;
     $tmp = 0;
+
     for ( my $i = 1; $i <= 10; ++$i )
     {
-        ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for 1..10;
+        $data_id = 0;
+        ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for 1..10;
     }
     $info = $coll->collection_info;
-    is $info->{length}, $tmp,   "OK length";
     is $info->{lists},  10,     "OK lists";
     is $info->{items},  $len,   "OK items";
 
     for ( my $i = 1; $i <= 10; ++$i )
     {
-        $coll->drop( $i );
+        $coll->drop_list( $i );
         $info = $coll->collection_info;
-        is $info->{length}, $tmp -= 11,  "OK length";
         is $info->{lists},  10 - $i,    "OK lists";
         is $info->{items},  $len -= 10,  "OK items";
     }
 
-    dies_ok { $coll->drop() } "expecting to die - no args";
+    dies_ok { $coll->drop_list() } "expecting to die - no args";
 
     foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
     {
-        dies_ok { $coll->drop(
+        dies_ok { $coll->drop_list(
             $arg,
             ) } "expecting to die: ".( $arg || '' );
     }
@@ -119,19 +106,28 @@ for my $big_data_threshold ( ( 0, 20 ) )
 
 }
 
-$coll = Redis::CappedCollection->create( $redis );
+$coll = Redis::CappedCollection->create(
+    redis   => $redis,
+    name    => $uuid->create_str,
+);
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->collection_exists, 'collection exists';
 Redis::CappedCollection->drop_collection( redis => $coll->_redis, name => $coll->name );
 ok !$coll->collection_exists, 'collection not exists';
 
-$coll = Redis::CappedCollection->create( $redis );
+$coll = Redis::CappedCollection->create(
+    redis   => $redis,
+    name    => $uuid->create_str,
+);
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->collection_exists, 'collection exists';
 Redis::CappedCollection::drop_collection( redis => $coll->_redis, name => $coll->name );
 ok !$coll->collection_exists, 'collection not exists';
 
-$coll = Redis::CappedCollection->create( $redis );
+$coll = Redis::CappedCollection->create(
+    redis   => $redis,
+    name    => $uuid->create_str,
+);
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->collection_exists, 'collection exists';
 dies_ok { Redis::CappedCollection->drop_collection() } "expecting to die";

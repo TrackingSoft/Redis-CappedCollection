@@ -4,7 +4,10 @@ use 5.010;
 use strict;
 use warnings;
 
-use lib 'lib';
+use lib qw(
+    lib
+    t/tlib
+);
 
 # NAME: Redis::CappedCollection benchmark
 
@@ -17,21 +20,9 @@ use Getopt::Long    qw( GetOptions );
 use Data::Dumper;
 
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
-    );
+    $DEFAULT_SERVER
+    $DEFAULT_PORT
+);
 
 # ENVIRONMENT ------------------------------------------------------------------
 
@@ -40,14 +31,12 @@ use Redis::CappedCollection qw(
 use constant {
     PORTION_TIME            => 10,
     INFO_TIME               => 60,
-    QUEUE_PATTERN           => NAMESPACE.':queue:*',
     VISITOR_ID_LEN          => 20,
-    THRESHOLD_STEP          => 1,
     LOST_PRODUCTIVITY       => 3,               # allowable percentage of lost productivity
     };
 
-my $host                    = DEFAULT_SERVER;
-my $port                    = DEFAULT_PORT;
+my $host                    = $DEFAULT_SERVER;
+my $port                    = $DEFAULT_PORT;
 my $empty_port;
 my $server;
 my $redis;
@@ -58,8 +47,6 @@ my $max_lists               = 2_000_000;
 my $data_len                = 200;
 my $run_time                = 0;
 my $receive                 = 0;
-my $big_data_threshold      = 0;
-my $find_optimal            = 0;
 my $dump                    = 0;
 
 my %bench                   = ();
@@ -85,17 +72,15 @@ my $ret = GetOptions(
     'visitors=i'                => \$max_lists,
     'run_time=i'                => \$run_time,
     'rate=f'                    => \$rate,
-    'find_optimal'              => \$find_optimal,
     'receive'                   => \$receive,
-    'big_data_threshold=i'      => \$big_data_threshold,
     'dump=i'                    => \$dump,
     "help|?"                    => \$help,
     );
 
-if ( !$ret or $help or ( $find_optimal and !$run_time ) )
+if ( !$ret || $help )
 {
     print <<'HELP';
-Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--advance_cleanup_bytes=...] [--advance_cleanup_num=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--big_data_threshold=...] [--find_optimal] [--dump=...] [--receive] [--help]
+Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--advance_cleanup_bytes=...] [--advance_cleanup_num=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--dump=...] [--receive] [--help]
 
 Start a Redis client, connect to the Redis server, randomly inserts or receives data
 
@@ -131,18 +116,9 @@ Options:
     --run_time=...
         Maximum, in seconds, run time.
         Default 0 - the work is not limited.
-    --big_data_threshold=...
-        The maximum number of items of data to store as a common hashes.
-        Default 0 - storage are separate hashes and ordered lists.
     --rate=N
         Exponentially distributed data with RATE.
         Default 0 - no exponentially data distributed.
-    --find_optimal
-        Find the optimal value of 'big_data_threshold'.
-        Permissible loss of performance of 3 percent.
-        To perform the required set value of 'run_time'. This value will be used as a test duration of each mode.
-        Testing is carried out separately for increasing values ​​of 'big_data_threshold', starting from zero.
-        WARNING: Data collection are removed after each stage (to ensure the same test conditions).
     --dump=N
         Amount of data for which to perform dump.
         Default 0 - does not perform.
@@ -173,7 +149,7 @@ sub tsk {
 
 sub client_info {
     my $redis_info = $redis->info;
-    print "WARNING: Do not forget to manually delete the test data.\n" unless $find_optimal;
+    print "WARNING: Do not forget to manually delete the test data.\n";
     print '-' x 78, "\n";
     print "CLIENT INFO:\n",
         "server                 $server",                       "\n",
@@ -184,13 +160,13 @@ sub client_info {
         "INFO_TIME              ", INFO_TIME,                   "\n",
         "coll_name              $coll_name",                    "\n",
         "data_len               $data_len",                     "\n",
+        "maxmemory-policy       ", ( $redis->config_get( 'maxmemory-policy' ) )[1], "\n",
+        "maxmemory              ", ( $redis->config_get( 'maxmemory' ) )[1],        "\n",
         "max_size               $max_size",                     "\n",
         "advance_cleanup_bytes  $advance_cleanup_bytes",        "\n",
         "advance_cleanup_num    $advance_cleanup_num",          "\n",
-        "big_data_threshold     $big_data_threshold",           "\n",
         "max_lists              $max_lists",                    "\n",
         "rate                   $rate",                         "\n",
-        "find_optimal           $find_optimal",                 "\n",
         "dump                   $dump",                         "\n",
         "run_time               $run_time",                     "\n",
         '-' x 78,                                               "\n",
@@ -204,16 +180,11 @@ sub redis_info {
           $rss / ( 1024 * 1024 * 1024 )
         : $rss / ( 1024 * 1024 );
     my $info = $coll->collection_info;
-    my $len = $info->{length};
-    my $short_len = ( $len > 1024 * 1024 * 1024 ) ?
-          $len / ( 1024 * 1024 * 1024 )
-        : $len / ( 1024 * 1024 );
 
     print
         "\n",
         '-' x 78,
         "\n",
-        "data length             ", sprintf( "%.2f", $short_len ), ( $len > 1024 * 1024 * 1024 ) ? 'G' : 'M', "\n",
         "data lists              $info->{lists}\n",
         "data items              $info->{items}\n",
         "mem_fragmentation_ratio $redis_info->{mem_fragmentation_ratio}\n",
@@ -242,7 +213,7 @@ sub exponential
     return log(1 - $x) / -$rate;
 }
 
-# Outputs random value in [0..LIMIT) range exponentially
+# Outputs random value in [0..LIMIT] range exponentially
 # distributed with RATE. The higher is rate, the more skewed is
 # the distribution (try rates from 0.1 to 3 to see how it changes).
 sub get_exponentially_id {
@@ -259,8 +230,7 @@ sub measurement_info {
     my $measurement    = shift;
 
     print
-        sprintf( "THRESHOLD %3d, mean %.2f op/sec, mem %7s, rate has fallen by ",
-            $measurement->{threshold},
+        sprintf( "mean %.2f op/sec, mem %7s, rate has fallen by ",
             $measurement->{mean},
             $measurement->{used_memory},
             ),
@@ -323,6 +293,20 @@ sub redis_dump {
 
 $server = "$host:$port";
 $redis  = Redis->new( server => $server );
+my $current_maxmemory_policy = ( $redis->config_get( 'maxmemory-policy' ) )[1];
+my $current_maxmemory = ( $redis->config_get( 'maxmemory' ) )[1];
+
+$redis->config_set( maxmemory => $max_size );
+$redis->config_set( 'maxmemory-policy' => 'noeviction' );
+
+$coll = Redis::CappedCollection->create(
+    redis   => $redis,
+    name    => $coll_name,
+    $receive ? () : (
+        advance_cleanup_bytes   => $advance_cleanup_bytes,
+        advance_cleanup_num     => $advance_cleanup_num,
+    ),
+);
 
 client_info();
 
@@ -333,118 +317,74 @@ if ( $receive and $coll_name eq $$.'' )
 }
 
 my @measurements = ();
-$big_data_threshold = 0 if $find_optimal;
 
-do
+$redis->flushall if $dump;
+
+my $measurement = {
+    speed       => [],
+    mean        => 0,
+    fallen      => 0,
+    used_memory => '',
+    };
+
+my $list_id;
+my ( $secs, $count ) = ( 0, 0 );
+my ( $time_before, $time_after );
+my ( $start_time, $last_stats_reports_time, $last_info_reports_time );
+
+my $data_id = 0;
+
+$start_time = $last_stats_reports_time = $last_info_reports_time = time;
+while ( !$work_exit )
 {
-    $redis->flushall if $dump;
-    $coll = Redis::CappedCollection->create(
-        $redis,
-        name            => $coll_name,
-        $receive ? () : (
-            size                    => $max_size,
-            advance_cleanup_bytes   => $advance_cleanup_bytes,
-            advance_cleanup_num     => $advance_cleanup_num,
-            big_data_threshold      => $big_data_threshold,
-            ),
-        );
+    if ( $run_time ) { last if gettimeofday - $start_time > $run_time; }
+    last if $work_exit;
 
-    my $measurement = {
-        threshold   => $big_data_threshold,
-        speed       => [],
-        mean        => 0,
-        fallen      => 0,
-        used_memory => '',
-        };
+    my $id          = ( !$receive && $rate ) ? get_exponentially_id() : int( rand $max_lists );
+    $list_id        = sprintf( '%0'.VISITOR_ID_LEN.'d', $id );
+    $time_before    = gettimeofday;
+    my @ret         = $receive ? $coll->receive( $list_id ) : $coll->insert( $list_id, $data_id++, $item );
+    $time_after     = gettimeofday;
+    $secs += $time_after - $time_before;
+    ++$count;
 
-    my $list_id;
-    my ( $secs, $count ) = ( 0, 0 );
-    my ( $time_before, $time_after );
-    my ( $start_time, $last_stats_reports_time, $last_info_reports_time );
-
-    $start_time = $last_stats_reports_time = $last_info_reports_time = time;
-    while ( !$work_exit )
+    if ( $dump and $count >= $dump )
     {
-        if ( $run_time ) { last if gettimeofday - $start_time > $run_time; }
-        last if $work_exit;
-    
-        my $id          = ( !$receive and $rate ) ? get_exponentially_id() : int( rand $max_lists );
-        $list_id        = sprintf( '%0'.VISITOR_ID_LEN.'d', $id );
-        $time_before    = gettimeofday;
-        my @ret         = $receive ? $coll->receive( $list_id ) : $coll->insert( $item, $list_id );
-        $time_after     = gettimeofday;
-        $secs += $time_after - $time_before;
-        ++$count;
-
-        if ( $dump and $count >= $dump )
-        {
-            my $dump = redis_dump( $coll );
-            $Data::Dumper::Sortkeys = 1;
-            print Dumper( $dump );
-            goto THE_END;
-        }
-
-        my $redis_info = $redis->info;
-        $measurement->{used_memory} = $redis_info->{used_memory_human},
-
-        my $time_from_stats = $time_after - $last_stats_reports_time;
-        if ( $time_from_stats > PORTION_TIME )
-        {
-            my $speed = int( $count / $secs );
-            push( @{$measurement->{speed}}, $speed )if $find_optimal;
-            print '[', scalar localtime, '] ',
-                $receive ? 'reads' : 'inserts', ', ',
-                $secs ? sprintf( '%d', $speed ) : 'N/A', ' op/sec ',
-                ' ' x 5, "\r";
-
-            if ( gettimeofday - $last_info_reports_time > INFO_TIME )
-            {
-                redis_info();
-                $last_info_reports_time = gettimeofday;
-            }
-
-            $secs  = 0;
-            $count = 0;
-            $last_stats_reports_time = gettimeofday;
-        }
+        my $dump = redis_dump( $coll );
+        $Data::Dumper::Sortkeys = 1;
+        print Dumper( $dump );
+        goto THE_END;
     }
 
-    goto THE_FINISH if $work_exit;
-    if ( $find_optimal )
+    my $redis_info = $redis->info;
+    $measurement->{used_memory} = $redis_info->{used_memory_human},
+
+    my $time_from_stats = $time_after - $last_stats_reports_time;
+    if ( $time_from_stats > PORTION_TIME )
     {
+        my $speed = int( $count / $secs );
+        print '[', scalar localtime, '] ',
+            $receive ? 'reads' : 'inserts', ', ',
+            $secs ? sprintf( '%d', $speed ) : 'N/A', ' op/sec ',
+            ' ' x 5, "\r";
 
-        $measurement->{mean}        = sum( @{$measurement->{speed}} ) / scalar @{$measurement->{speed}};
-        push @measurements, $measurement;
-        $measurement->{fallen}      = ( $measurements[0]->{mean} and $measurement->{mean} ) ? ( $measurements[0]->{mean} - $measurement->{mean} ) * 100 / $measurements[0]->{mean} : 'N/A';
+        if ( gettimeofday - $last_info_reports_time > INFO_TIME )
+        {
+            redis_info();
+            $last_info_reports_time = gettimeofday;
+        }
 
-        measurement_info( $measurement );
-        print
-            '-' x 78,
-            "\n";
-
-        $big_data_threshold += THRESHOLD_STEP if $find_optimal;
-        $coll->drop_collection;
-
-        goto THE_FINISH if $measurement->{fallen} > LOST_PRODUCTIVITY;
+        $secs  = 0;
+        $count = 0;
+        $last_stats_reports_time = gettimeofday;
     }
+}
 
-} while $find_optimal;
+goto THE_FINISH if $work_exit;
 
 # POSTCONDITIONS ---------------------------------------------------------------
 
 THE_FINISH:
-
-if ( $find_optimal )
-{
-    print "\n", '-' x 78, "\n";
-    $no_line = 1;
-    print "\nHISTORY:\n";
-    foreach my $iteration ( @measurements )
-    {
-        measurement_info( $iteration );
-    }
-    $coll->drop_collection if $coll->name;
-}
 
 print
     "\n",
@@ -452,6 +392,8 @@ print
     "\n",
     ;
 THE_END:
+$redis->config_set( maxmemory => $current_maxmemory );
+$redis->config_set( 'maxmemory-policy' => $current_maxmemory_policy );
 $redis->quit;
 
 exit;

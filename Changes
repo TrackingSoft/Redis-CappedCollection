@@ -1,5 +1,42 @@
 Revision history for Redis::CappedCollection module
 
+1.00  Mon Jun  15 2015
+
+    !!! This is a major upgrade that changes API. It's strongly advised to study
+    revised documentation and update your code where necessary !!!
+
+    !!! Data structures created on the server by previous versions of the module
+    are incompatible with this release. Existing collections must be recreated
+    after updating to this release. !!!
+
+    CHANGES:
+    - Redis::CappedCollection->new() is deprecated and will be removed in future.
+      Please use either create() or open() instead.
+    - In the parameters of the methods 'redis' may be either a Redis object
+      or a hash reference of parameters to create a Redis object.
+    - Changed the order of the arguments of the 'insert' method.
+    - The list ID and data ID arguments are mandatory for 'insert' method.
+    - Added 'data time' argument for 'update' method.
+    - Method 'info' renamed to 'list_info'.
+    - Method 'exists' renamed to 'list_exists'.
+    - Method 'drop' renamed to 'drop_list'.
+    - Constructor parameter 'big_data_threshold' was removed.
+    - 'last_removed_time' information attribute was removed.
+    - Added constructor argument 'memory_reserve'.
+    - Added 'oldest_time' method.
+    - Use Const::Fast for values exported by the module.
+    - Attributes 'advance_cleanup_bytes' and 'advance_cleanup_num' are stored
+      on the Redis server and can be changed only by 'resize' method.
+    - $MIN_MEMORY_RESERVE, $MAX_MEMORY_RESERVE constants added.
+    - $ENONEXISTENTDATAID, $EINCOMPDATAVERSION errors added.
+    - Redis server version 2.8 or higher is required.
+    - We strongly recommend setting 'maxmemory' option in the redis.conf file.
+    - Added utilities to dump and restore the collection: dump_collection,
+      restore_collection .
+    FIXES:
+    - 'open' method fixed.
+    - Tests fixed.
+
 0.17  Thu Apr  23 2015
     CHANGES:
     - Added 'create', 'open' constructors.

@@ -32,20 +32,7 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -68,25 +55,29 @@ my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 $coll = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
+    name    => $uuid->create_str,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 #-- all correct
 ok !$coll->lists, "list not exist";
 
+my $data_id = 0;
+
 # some inserts
 @arr = ();
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    $coll->insert( $_, $i ) for $i..10;
+    $data_id = 0;
+    $coll->insert( $i, $data_id++, $_ ) for $i..10;
     push @arr, $i.'';
     @arr = sort @arr;
     my @keys = $coll->lists;
@@ -108,6 +99,6 @@ foreach my $arg ( ( "", \"scalar", [], $uuid ) )
         ) } "expecting to die: ".( $arg || '' );
 }
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 }

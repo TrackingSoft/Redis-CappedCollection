@@ -32,20 +32,7 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -68,21 +55,21 @@ my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 $coll = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
     name    => "Some name",
-    size    => 1_000_000,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
 is $coll->name, "Some name",    "correct collection name";
-is $coll->size, 1_000_000,      "correct size";
+
+my $data_id = 0;
 
 #-- all correct
 
@@ -91,16 +78,16 @@ $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length";
 is $info->{lists},  10,     "OK lists";
 is $info->{items},  $len,   "OK items";
 
 $coll->drop_collection;
 
-$list_key = NAMESPACE.':L:*';
+$list_key = $NAMESPACE.':L:*';
 @arr = $coll->_call_redis( "KEYS", $list_key );
 
 ok !$coll->_call_redis( "EXISTS", $status_key ),    "status hash droped";
@@ -108,6 +95,5 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
 ok !@arr,                                           "data lists droped";
 
 is $coll->name, undef, "correct collection name";
-is $coll->size, undef, "correct size";
 
 }

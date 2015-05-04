@@ -32,20 +32,9 @@ BEGIN {
 use bytes;
 use Data::UUID;
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
+    $NAMESPACE
 
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $EDATATOOLARGE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -72,7 +61,7 @@ my $maxmemory_mode;
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $redis = get_redis( $redis, conf =>
+    $redis = get_redis( conf =>
         {
             port                => $port,
             maxmemory           => 0,
@@ -84,7 +73,8 @@ sub new_connect {
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->create(
-        $redis,
+        redis   => $redis,
+        name    => $uuid->create_str,
         defined( $maxmemory_mode ) ? ( check_maxmemory => $maxmemory_mode ) : (),
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
@@ -92,8 +82,8 @@ sub new_connect {
     ok $coll->_server =~ /.+:$port$/, $msg;
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
+    $queue_key   = $NAMESPACE.':Q:'.$coll->name;
     ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
@@ -110,6 +100,8 @@ is $coll->_maxmemory_policy, 'noeviction', 'check_maxmemory correct';
 undef $maxmemory_mode;
 new_connect();
 
+my $data_id = 0;
+
 #-- all correct
 
 # some inserts
@@ -117,10 +109,10 @@ $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
@@ -129,39 +121,35 @@ my $max_datasize = 100;
 $coll->max_datasize( $max_datasize );
 is $coll->max_datasize, $max_datasize, $msg;
 
-eval { $id = $coll->insert( '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, EDATATOOLARGE, "EDATATOOLARGE";
+eval { $id = $coll->insert( 'List id', $data_id, '*' x ( $max_datasize + 1 ) ) };
+is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
 note '$@: ', $@;
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, EDATATOOLARGE, "EDATATOOLARGE";
+is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
 note '$@: ', $@;
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length - $info->{length}";
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 $coll->max_datasize( $prev_max_datasize );
 is $coll->max_datasize, $prev_max_datasize, $msg;
 
-eval { $id = $coll->insert( '*' x ( $max_datasize + 1 ) ) };
+eval { $id = $coll->insert( 'List id', $data_id, '*' x ( $max_datasize + 1 ) ) };
 ok !$@, $msg;
 $info = $coll->collection_info;
-is $info->{length}, $tmp += $max_datasize + 1,  "OK length - $info->{length}";
 is $info->{lists},  11,                         "OK lists - $info->{lists}";
 is $info->{items},  ++$len,                     "OK queue length - $info->{items}";
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
 ok !$@, $msg;
 $info = $coll->collection_info;
-is $info->{length}, $tmp + $max_datasize,   "OK length - $info->{length}";
 is $info->{lists},  11,                     "OK lists - $info->{lists}";
 is $info->{items},  $len,                   "OK queue length - $info->{items}";
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 }

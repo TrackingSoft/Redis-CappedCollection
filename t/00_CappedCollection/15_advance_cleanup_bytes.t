@@ -33,20 +33,9 @@ use bytes;
 use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $DEFAULT_SERVER
+    $DEFAULT_PORT
+    $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -66,16 +55,16 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $status_key, $queue_key, $size, $advance_cleanup_bytes, $maxmemory, @arr );
+my ( $coll, $name, $tmp, $status_key, $queue_key, $advance_cleanup_bytes, $maxmemory, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
-    $redis = get_redis( $redis, conf =>
+    $redis = get_redis( conf =>
         {
-            port                => Net::EmptyPort::empty_port( DEFAULT_PORT ),
+            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
             maxmemory           => $maxmemory,
 #            "vm-enabled"        => 'no',
             "maxmemory-policy"  => 'noeviction',
@@ -85,105 +74,72 @@ sub new_connect {
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->create(
-        $redis,
-        $size          ? ( 'size'         => $size         ) : (),
+        redis   => $redis,
+        name    => $uuid->create_str,
         $advance_cleanup_bytes ? ( 'advance_cleanup_bytes' => $advance_cleanup_bytes ) : (),
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
 
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-    $status_key  = NAMESPACE.':status:'.$coll->name;
-    $queue_key   = NAMESPACE.':queue:'.$coll->name;
+    $status_key  = $NAMESPACE.':S:'.$coll->name;
+    $queue_key   = $NAMESPACE.':Q:'.$coll->name;
     ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
 
-$advance_cleanup_bytes = $size = 0;
+$advance_cleanup_bytes = 0;
 $maxmemory = 0;
 new_connect();
 is $coll->advance_cleanup_bytes, 0, $msg;
 $coll->drop_collection;
 
-$advance_cleanup_bytes = 12345;
-$size = 123;
-dies_ok { new_connect() } "expecting to die: 12345 > $size";
-
-$size = 100_000;
 $advance_cleanup_bytes = 50_000;
 new_connect();
 is $coll->advance_cleanup_bytes, $advance_cleanup_bytes, $msg;
 
-$coll->insert( '*' x 10_000 ) for 1..10;
-is $coll->collection_info->{length}, 100_000, "correct value";
+my $data_id = 0;
+
+$coll->insert( 'List id', $data_id++, '*' x 10_000 ) for 1..10;
 $name = 'TEST';
-( $name, $tmp ) = $coll->insert( '*', $name );
-is $coll->collection_info->{length}, 40_001, "correct value";
-$coll->insert( '*' x 10_000, $name );
-is $coll->collection_info->{length}, 50_001, "correct value";
+$tmp = $data_id;
+$coll->insert( $name, $data_id++, '*' );
+$coll->insert( $name, $data_id++, '*' x 10_000 );
 
 $coll->update( $name, $tmp, '*' x 10_000 );
-is $coll->collection_info->{length}, 60_000, "correct value";
 
-$coll->insert( '*' x 10_000, $name ) for 1..4;
-is $coll->collection_info->{length}, 100_000, "correct value";
+$coll->insert( $name, $data_id++, '*' x 10_000 ) for 1..4;
 
 dies_ok { $coll->advance_cleanup_bytes( -1 ) } "expecting to die: advance_cleanup_bytes is negative";
-dies_ok { $coll->advance_cleanup_bytes( $coll->size + 1 ) } "expecting to die: advance_cleanup_bytes > size";
 
 $coll->drop_collection;
 
-$size = 10;
 $advance_cleanup_bytes = 0;
 new_connect();
 $tmp = 'A';
-$coll->insert( $tmp++, $name, undef, gettimeofday + 0 ) for 1..10;
+$data_id = 0;
+$coll->insert( $name, $data_id++, $tmp++, gettimeofday + 0 ) for 1..10;
 @arr = $coll->receive( $name );
 is "@arr", "A B C D E F G H I J", "correct value";
-$coll->insert( $tmp++, $name, undef, gettimeofday + 0 );
+$coll->insert( $name, $data_id++, $tmp++, gettimeofday + 0 );
 @arr = $coll->receive( $name );
-is "@arr", "B C D E F G H I J K", "correct value";
-$coll->insert( $tmp++ x 2, $name, undef, gettimeofday + 0 );
-@arr = $coll->receive( $name );
-is "@arr", "D E F G H I J K LL", "correct value";
-
-$size = 10;
-$advance_cleanup_bytes = 5;
-new_connect();
-$tmp = 'A';
-$coll->insert( $tmp++, $name, undef, gettimeofday + 0 ) for 1..10;
-@arr = $coll->receive( $name, undef, gettimeofday + 0 );
-@arr = sort @arr;
-# data_id = 0 1 2 3 4 5 6 7 8 9
-is "@arr", "A B C D E F G H I J", "correct value";
-$coll->insert( $tmp++, $name, undef, gettimeofday + 0 );
-@arr = $coll->receive( $name );
-@arr = sort @arr;
-# data_id = 6 7 8 9 10
-#           G H I J K
-is "@arr", "G H I J K", "correct value";
-$coll->update( $name, 6, $tmp++ );
-@arr = $coll->receive( $name );
-@arr = sort @arr;
-# data_id = 6 7 8 9 10
-#           L H I J K
-is "@arr", "H I J K L", "correct value";
-$coll->insert( $tmp++, $name, undef, gettimeofday + 0 ) for 1..5;
-@arr = $coll->receive( $name );
-@arr = sort @arr;
-# data_id = 6 7 8 9 10
-#           L H I J K M N O P Q
-is "@arr", "H I J K L M N O P Q", "correct value";
-@arr = sort @arr;
-$coll->update( $name, 6, '**' );
-@arr = $coll->receive( $name );
-is "@arr", "N O P Q", "correct value";
+is "@arr", "A B C D E F G H I J K", "correct value";
 
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis                   => DEFAULT_SERVER.":".Net::EmptyPort::empty_port( DEFAULT_PORT ),
+        redis                   => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        name                    => $uuid->create_str,
         advance_cleanup_bytes   => $arg,
+        ) } "expecting to die: ".( $arg || '' );
+}
+
+foreach my $arg ( ( undef, 0.04, 0.6, -1, -3, "", "0.6", \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll = Redis::CappedCollection->create(
+        redis           => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        name            => $uuid->create_str,
+        memory_reserve  => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }
 

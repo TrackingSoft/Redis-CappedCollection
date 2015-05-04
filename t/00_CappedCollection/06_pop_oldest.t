@@ -33,20 +33,8 @@ use bytes;
 use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
-    DEFAULT_SERVER
-    DEFAULT_PORT
-    NAMESPACE
-
-    ENOERROR
-    EMISMATCHARG
-    EDATATOOLARGE
-    ENETWORK
-    EMAXMEMORYLIMIT
-    EMAXMEMORYPOLICY
-    ECOLLDELETED
-    EREDIS
-    EDATAIDEXISTS
-    EOLDERTHANALLOWED
+    $NAMESPACE
+    $ECOLLDELETED
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -69,14 +57,15 @@ my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
 $coll = Redis::CappedCollection->create(
-    $redis,
+    redis   => $redis,
+    name    => $uuid->create_str,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$status_key  = NAMESPACE.':status:'.$coll->name;
-$queue_key   = NAMESPACE.':queue:'.$coll->name;
+$status_key  = $NAMESPACE.':S:'.$coll->name;
+$queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 
@@ -84,15 +73,17 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 @arr = $coll->pop_oldest;
 is scalar( @arr ), 0, "empty array";
 
+my $data_id = 0;
+
 # some inserts
 $len = 0;
 $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
-    ( $coll->insert( $_, $i, undef, gettimeofday + 0 ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    $data_id = 0;
+    ( $coll->insert( $i, $data_id++, $_, gettimeofday + 0 ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll->collection_info;
-is $info->{length}, $tmp,   "OK length";
 is $info->{lists},  10,     "OK lists";
 is $info->{items},  $len,   "OK items";
 
@@ -107,17 +98,16 @@ for ( my $i = 1; $i <= 10; ++$i )
         eval { $info = $coll->collection_info; };
         if ( $@ )
         {
-            ok( ( $coll->last_errorcode == ECOLLDELETED and $i == 10 and $j == 10 ), "expecting to die" );
+            ok( ( $coll->last_errorcode == $ECOLLDELETED and $i == 10 and $j == 10 ), "expecting to die" );
         }
         else
         {
-            is $info->{length}, ( $tmp -= bytes::length( $data ) ), "OK length";
             is $info->{lists},  10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
             is $info->{items},  --$len,                             "OK items";
         }
     }
 }
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", NAMESPACE.":*" );
+$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 }
