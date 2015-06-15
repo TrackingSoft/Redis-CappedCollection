@@ -70,6 +70,9 @@ use Params::Util qw(
 use Redis '1.976';
 use Try::Tiny;
 
+class_type 'Redis';
+class_type 'Test::RedisServer';
+
 #-- declarations ---------------------------------------------------------------
 
 =head1 SYNOPSIS
@@ -1541,7 +1544,7 @@ Existing L<Redis> object or a hash reference with parameters to create a new one
 =cut
 has 'redis'                 => (
     is          => 'ro',
-    isa         => 'Ref',
+    isa         => 'Redis|Test::RedisServer|HashRef',
     required    => 1,
 );
 
