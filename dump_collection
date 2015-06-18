@@ -98,7 +98,7 @@ HELP
 
     my $redis_server = "$host:$port";
 
-#FIXME: Remove it
+#NOTE: Only for test
 #-------------------------------------------------------------------------------
 #use Time::HiRes ();
 #my @_collection_data = (

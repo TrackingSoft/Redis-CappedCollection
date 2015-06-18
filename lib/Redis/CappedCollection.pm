@@ -7,7 +7,7 @@ Redis server setting) collections with FIFO data removal.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 1.00
+This documentation refers to C<Redis::CappedCollection> version 1.01
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '1.00';
+our $VERSION = '1.01';
 
 use Exporter qw(
     import
@@ -162,8 +162,6 @@ the oldest data in the collection.
 
 Limits are specified when the collection is created.
 Collection size is determined by 'maxmemory' redis server settings.
-
-=back
 
 The package includes the utilities to dump and restore the collection:
 F<dump_collection>, F<restore_collection> .
@@ -1300,7 +1298,7 @@ subtype __PACKAGE__.'::DataStr',
 
 =head2 CONSTRUCTOR
 
-=head3 C<create( redis =E<gt> $server, name => $name, ... )>
+=head3 C<create( redis =E<gt> $server, name =E<gt> $name, ... )>
 
 Create a new collection on the Redis server and return an C<Redis::CappedCollection>
 object to access it. Must be called as a class method only.
@@ -1356,7 +1354,7 @@ The following examples illustrate other uses of the C<create> method:
 
     my $redis = Redis->new( server => "$server:$port" );
     my $coll = Redis::CappedCollection->create( redis => $redis, name => 'Next collection' );
-    my $next_coll = Redis::CappedCollection->create( $coll, name => 'Some name' );
+    my $next_coll = Redis::CappedCollection->create( redis => $coll, name => 'Some name' );
 
 An error exception is thrown (C<confess>) if an argument is not valid or the collection with
 same name already exists.
@@ -2739,7 +2737,7 @@ sub _redis_exception {
 sub _clear_sha1 {
     my ( $self ) = @_;
 
-    delete $_lua_scripts->{ $self->_redis };
+    delete( $_lua_scripts->{ $self->_redis } ) if $self->_redis;
 }
 
 sub _redis_constructor {
@@ -3149,6 +3147,8 @@ There are no known bugs in this package.
 Please report problems to the L</"AUTHOR">.
 
 Patches are welcome.
+
+=back
 
 =head1 MORE DOCUMENTATION
 

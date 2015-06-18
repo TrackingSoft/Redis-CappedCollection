@@ -23,12 +23,10 @@ t/00_CappedCollection/10_quit.t
 t/00_CappedCollection/11_max_datasize.t
 t/00_CappedCollection/12_last_errorcode.t
 t/00_CappedCollection/13_name.t
-t/00_CappedCollection/14_size.t
 t/00_CappedCollection/15_advance_cleanup_bytes.t
 t/00_CappedCollection/17_advance_cleanup_num.t
 t/00_CappedCollection/18_info.t
 t/00_CappedCollection/19_drop.t
-t/99_usage/01_many_inserts.t
 t/tlib/Redis/CappedCollection/Test/Utils.pm
 xt/author/.perlcritic.rc
 xt/author/92_vars.t
