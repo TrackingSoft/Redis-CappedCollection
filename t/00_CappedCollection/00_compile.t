@@ -6,7 +6,7 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 24;
+use Test::More tests => 25;
 
 BEGIN {
     eval 'use Test::NoWarnings';    ## no critic
@@ -28,6 +28,7 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     list_exists
     lists
     drop_collection
+    clear_collection
     drop_list
     ping
     quit

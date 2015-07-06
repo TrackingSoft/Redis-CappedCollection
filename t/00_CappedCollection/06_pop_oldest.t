@@ -81,12 +81,14 @@ $tmp = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
     $data_id = 0;
-    ( $coll->insert( $i, $data_id++, $_, gettimeofday + 0 ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
+    ( $coll->insert( $i, $data_id++, $_, gettimeofday + 0 + 0 ), $tmp += bytes::length( $_.'' ), ++$len ) for $i..10;
 }
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists";
 is $info->{items},  $len,   "OK items";
 
+my $prev_time = 0;
+my $time_grows = 0;
 for ( my $i = 1; $i <= 10; ++$i )
 {
     foreach my $j ( $i..10 )
@@ -104,9 +106,16 @@ for ( my $i = 1; $i <= 10; ++$i )
         {
             is $info->{lists},  10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
             is $info->{items},  --$len,                             "OK items";
+            ok $info->{last_removed_time} >= $prev_time,             'OK last_removed_time';
+            ++$time_grows if $info->{last_removed_time} > $prev_time;
+            $prev_time = $info->{last_removed_time};
         }
     }
 }
+
+@arr = $coll->pop_oldest;
+ok !@arr, 'nothing to pop';
+ok $time_grows, 'last_removed_time grows';
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 

@@ -370,6 +370,35 @@ my $_lua_time_key   = "local TIME_KEY   = TIME_KEYS..':'..list_id";
 
 my %lua_script_body;
 
+my $_lua_clean_data = <<"END_CLEAN_DATA";
+-- remove the control structures of the collection
+if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
+    ret = ret + redis.call( 'DEL', QUEUE_KEY )
+end
+
+-- each element of the list are deleted separately, as total number of items may be too large to send commands 'DEL'
+$_lua_data_keys
+$_lua_time_keys
+
+local arr = redis.call( 'KEYS', DATA_KEYS..':*' )
+if #arr > 0 then
+
+-- remove structures store data lists
+    for i = 1, #arr do
+        ret = ret + redis.call( 'DEL', arr[i] )
+    end
+
+-- remove structures store time lists
+    arr = redis.call( 'KEYS', TIME_KEYS..':*' )
+    for i = 1, #arr do
+        ret = ret + redis.call( 'DEL', arr[i] )
+    end
+
+end
+
+return ret
+END_CLEAN_DATA
+
 my $_lua_cleaning = <<"END_CLEANING";
 local MEMORY_RESERVE, MEMORY_RESERVE_COEFFICIENT, MAXMEMORY
 local LAST_REDIS_USED_MEMORY = 0
@@ -576,7 +605,8 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
             end
 
             -- continue to work with the excess (requiring removal) data and for them using the prefix 'excess_'
-            local excess_list_id    = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0 )[1]
+            local excess_list_id, very_oldest_time = unpack( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' ) )
+            very_oldest_time        = tonumber( very_oldest_time )
             -- key data structures
             local excess_data_key   = DATA_KEYS..':'..excess_list_id
             local excess_time_key   = TIME_KEYS..':'..excess_list_id
@@ -674,6 +704,8 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
             redis.call( 'HDEL', excess_data_key, excess_data_id )
             items = items - 1
             coll_items = coll_items - 1
+
+            redis.call( 'HSET', STATUS_KEY, 'last_removed_time', very_oldest_time )
 
             if items > 0 then
                 -- If the list has more data
@@ -811,10 +843,10 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
 end
 
 -- Validating the time of new data, if required
+local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
 if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
-        local oldest_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
-        if oldest_time > 0 and data_time < oldest_time then
+        if data_time < last_removed_time then
             return $EOLDERTHANALLOWED
         end
     end
@@ -857,6 +889,9 @@ end
 
 -- reflect the addition of new data
 redis.call( 'HINCRBY', STATUS_KEY, 'items', 1 )
+if data_time < last_removed_time then
+    redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
+end
 
 return $ENOERROR
 END_INSERT
@@ -890,6 +925,13 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
     return $ENONEXISTENTDATAID
 end
 
+local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
+if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
+    if new_data_time < last_removed_time then
+        return $EOLDERTHANALLOWED
+    end
+end
+
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
 _debug_switch( 6, 'update' )
@@ -914,6 +956,10 @@ if new_data_time ~= 0 then
         redis.call( 'ZADD', TIME_KEY, new_data_time, data_id )
         local oldest_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
         redis.call( 'ZADD', QUEUE_KEY, oldest_time, list_id )
+    end
+
+    if new_data_time < last_removed_time then
+        redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
     end
 end
 
@@ -1005,6 +1051,7 @@ if items == 1 then
 else
     data_id = redis.call( 'ZRANGE', TIME_KEY, 0, 0 )[1]
 end
+local very_oldest_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
 
 -- get data
 
@@ -1015,14 +1062,14 @@ data = redis.call( 'HGET', DATA_KEY, data_id )
 redis.call( 'HDEL', DATA_KEY, data_id )
 items = items - 1
 
+-- obtain information about the data that has become the oldest
+local oldest_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
+
 if items > 0 then
     -- If the list has more data
 
     -- delete the information about the time of the data
     redis.call( 'ZREM', TIME_KEY, data_id )
-
-    -- obtain information about the data that has become the oldest
-    local oldest_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
 
     redis.call( 'ZADD', QUEUE_KEY, oldest_time, list_id )
 
@@ -1042,6 +1089,7 @@ else
 end
 
 redis.call( 'HINCRBY', STATUS_KEY, 'items', -1 )
+redis.call( 'HSET', STATUS_KEY, 'last_removed_time', very_oldest_time )
 
 return { $ENOERROR, true, list_id, data }
 END_POP_OLDEST
@@ -1061,15 +1109,16 @@ if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
     return { $ECOLLDELETED, false, false, false, false, false, false, false }
 end
 
-local oldest_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
-local lists, items, older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
+local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
+local lists, items, older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
         'lists',
         'items',
         'older_allowed',
         'advance_cleanup_bytes',
         'advance_cleanup_num',
         'memory_reserve',
-        'data_version'
+        'data_version',
+        'last_removed_time'
     ) )
 
 if type( data_version ) ~= 'string' then data_version = '0' end
@@ -1083,6 +1132,7 @@ return {
     advance_cleanup_num,
     memory_reserve,
     data_version,
+    last_removed_time,
     oldest_time
 }
 END_COLLECTION_INFO
@@ -1102,7 +1152,7 @@ if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
     return { $ECOLLDELETED, false }
 end
 
-local oldest_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
+local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
 return { $ENOERROR, oldest_time }
 END_OLDEST_TIME
 
@@ -1145,39 +1195,40 @@ local coll_name     = ARGV[1]
 $_lua_namespace
 $_lua_queue_key
 $_lua_status_key
-$_lua_data_keys
-$_lua_time_keys
 
 -- initialize the data returned from the script
 local ret = 0   -- the number of deleted items
 
--- remove the control structures of the collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 1 then
-    ret = ret + redis.call( 'DEL', QUEUE_KEY, STATUS_KEY )
+    ret = ret + redis.call( 'DEL', STATUS_KEY )
 end
 
--- each element of the list are deleted separately, as total number of items may be too large to send commands 'DEL'
-
-local arr = redis.call( 'KEYS', DATA_KEYS..':*' )
-if #arr > 0 then
-
--- remove structures store data lists
-    for i = 1, #arr do
-        ret = ret + redis.call( 'DEL', arr[i] )
-    end
-
--- remove structures store time lists
-    arr = redis.call( 'KEYS', TIME_KEYS..':*' )
-    for i = 1, #arr do
-        ret = ret + redis.call( 'DEL', arr[i] )
-    end
-
-end
-
-return ret
+$_lua_clean_data
 END_DROP_COLLECTION
 
-$lua_script_body{drop} = <<"END_DROP";
+$lua_script_body{clear_collection} = <<"END_CLEAR_COLLECTION";
+-- to remove the entire collection data
+
+local coll_name     = ARGV[1]
+
+-- key data storage structures
+$_lua_namespace
+$_lua_queue_key
+$_lua_status_key
+
+-- initialize the data returned from the script
+local ret = 0   -- the number of deleted items
+
+redis.call( 'HMSET', STATUS_KEY,
+    'lists',                    0,
+    'items',                    0,
+    'last_removed_time',        0
+);
+
+$_lua_clean_data
+END_CLEAR_COLLECTION
+
+$lua_script_body{drop_list} = <<"END_DROP_LIST";
 -- to remove the data_list
 
 local coll_name     = ARGV[1]
@@ -1222,7 +1273,7 @@ redis.call( 'HINCRBY', STATUS_KEY, 'lists', -1 )
 redis.call( 'ZREM', QUEUE_KEY, list_id )
 
 return { $ENOERROR, 1 }
-END_DROP
+END_DROP_LIST
 
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
 -- creation of the collection and characterization of the collection by accessing existing collection
@@ -1262,7 +1313,8 @@ else
         'advance_cleanup_bytes',    advance_cleanup_bytes,
         'advance_cleanup_num',      advance_cleanup_num,
         'memory_reserve',           memory_reserve,
-        'data_version',             data_version
+        'data_version',             data_version,
+        'last_removed_time',        0
     );
 end
 
@@ -1332,7 +1384,7 @@ This example illustrates a C<create()> call with all the valid arguments:
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
         older_allowed   => 0, # Allow adding an element to collection that's older
-                        # than the oldest element currently stored in collection.
+                        # than the last element removed from collection.
                         # Default 0.
         check_maxmemory => 1, # Controls if collection should try to find out maximum
                         # available memory from Redis.
@@ -1627,7 +1679,7 @@ has 'max_datasize'          => (
 =head3 C<older_allowed>
 
 Accessor for the C<older_allowed> attribute which controls if adding an element
-that is older than the oldest element currently stored in collection, is allowed.
+that is older than the last element removed from collection is allowed.
 Default is C<0> (not allowed).
 
 The method returns the current value of the attribute.
@@ -1650,7 +1702,7 @@ Not used when C<'maxmemory'> == 0 (it is not set in the F<redis.conf>).
 Valid values must be between C<$MIN_MEMORY_RESERVE> and C<$MAX_MEMORY_RESERVE>.
 
 The method returns the current value of the attribute.
-The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+The C<memory_reserve> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 =cut
 has 'memory_reserve'        => (
@@ -1718,6 +1770,10 @@ returned by L<Time::HiRes|Time::HiRes> module) are supported to have time
 granularity of less than 1 second and stored with 4 decimal places.
 
 =back
+
+If collection is set to C<older_allowed == 1> and C<$data_time> less than time of the last removed
+element (C<last_removed_time> - see L</collection_info>) then C<last_removed_time> is set to 0.
+The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 The method returns the ID of the data list to which the data was inserted (value of
 the C<$list_id> argument).
@@ -1793,8 +1849,12 @@ data time is preserved.
 
 =back
 
-Method returns true if the data is updated or false if the list with
-the given ID does not exist or is used an invalid data ID.
+If the collection is set to C<older_allowed == 1> and C<$new_data_time> less than time of the last
+removed element (C<last_removed_time> - see L</collection_info>) then C<last_removed_time> is set to 0.
+The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+
+Method returns true if the data is updated or false if the list with the given ID does not exist or
+is used an invalid data ID.
 
 Throws an exception on other errors.
 
@@ -2013,8 +2073,8 @@ C<undef> if the collection does not contain data.
 
 =item *
 
-C<older_allowed> - True if it is allowed to put data in collection that is older than the oldest element
-already stored in collection.
+C<older_allowed> - True if it is allowed to put data in collection that is older than the last element
+removed from collection.
 
 =item *
 
@@ -2033,6 +2093,11 @@ of the collection data after adding new data may exceed C<'maxmemory'>.
 =item *
 
 C<data_version> - Data structure version.
+
+=item *
+
+C<last_removed_time> - time of the last removed element from collection
+or 0 if nothing was removed from collection yet.
 
 =back
 
@@ -2090,7 +2155,8 @@ sub collection_info {
         advance_cleanup_num     => $ret[4],
         memory_reserve          => $ret[5],
         data_version            => $ret[6],
-        oldest_time             => $ret[7] ? $ret[7] + 0 : $ret[7],
+        last_removed_time       => $ret[7],
+        oldest_time             => $ret[8] ? $ret[8] + 0 : $ret[8],
     };
 }
 
@@ -2477,7 +2543,7 @@ sub drop_list {
     $self->_set_last_errorcode( $ENOERROR );
 
     my ( $error, $ret ) = $self->_call_redis(
-        $self->_lua_script_cmd( 'drop' ),
+        $self->_lua_script_cmd( 'drop_list' ),
         0,
         $self->name,
         $list_id,
@@ -2487,6 +2553,40 @@ sub drop_list {
         $self->_clear_sha1 if $error == $ECOLLDELETED;
         $self->_throw( $error );
     }
+
+    return $ret;
+}
+
+=head3 C<clear_collection()>
+
+    $coll->clear_collection;
+
+Use the C<clear_collection> to remove the entire collection data from the redis server,
+
+Before using this method, make sure that the collection is not being used by other customers.
+
+Warning: consider C<clear_collection> as a command that should only be used in production
+environments with extreme care. Its performance is not optimal for large collections.
+This command is intended for debugging and special operations.
+Avoid using C<clear_collection> in your regular application code.
+
+C<clear_collection> mat throw an exception (C<confess>) if
+the collection contains a very large number of lists
+(C<'Error while reading from Redis server'>).
+
+=cut
+sub clear_collection {
+    my $self = shift;
+
+    my $ret;
+
+    $self->_set_last_errorcode( $ENOERROR );
+
+    $ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'clear_collection' ),
+        0,
+        $self->name,
+    );
 
     return $ret;
 }
@@ -3031,7 +3131,7 @@ CappedCollection package creates the following data structures on Redis:
     # If the amount of data in the list is greater than 1
     # ZSET    Namespace:T:Collection_id:DataList_id
     # For example:
-    redis 127.0.0.1:6379> KEYS C:?:*
+    redis 127.0.0.1:6379> KEYS C:[DT]:*
     1) "C:D:Some collection name:Some list id"
     # If the amount of data in the list is greater than 1
     2) "C:T:Some collection name:Some list id"

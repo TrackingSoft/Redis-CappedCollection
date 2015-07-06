@@ -87,7 +87,7 @@ is $info->{items},  $len,   "OK items";
 
 $coll->drop_collection;
 
-$list_key = $NAMESPACE.':L:*';
+$list_key = $NAMESPACE.':[DT]:*';
 @arr = $coll->_call_redis( "KEYS", $list_key );
 
 ok !$coll->_call_redis( "EXISTS", $status_key ),    "status hash droped";
@@ -95,5 +95,30 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
 ok !@arr,                                           "data lists droped";
 
 is $coll->name, undef, "correct collection name";
+
+$coll = Redis::CappedCollection->create(
+    redis   => $redis,
+    name    => "Some name",
+    );
+isa_ok( $coll, 'Redis::CappedCollection' );
+
+$coll->insert( 'list_id', $data_id++, 'Stuff' ) for 1..10;
+$info = $coll->collection_info;
+ok $info->{lists}, "OK lists";
+ok $info->{items}, "OK items";
+
+$coll->clear_collection;
+$info = $coll->collection_info;
+ok !$info->{lists}, "OK lists";
+ok !$info->{items}, "OK items";
+
+$list_key = $NAMESPACE.':[DT]:*';
+@arr = $coll->_call_redis( "KEYS", $list_key );
+
+ok $coll->_call_redis( "EXISTS", $status_key ),    "status hash exists";
+ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
+ok !@arr,                                           "data lists droped";
+
+ok defined( $coll->name ), "correct collection name";
 
 }

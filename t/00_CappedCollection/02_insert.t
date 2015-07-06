@@ -34,6 +34,7 @@ use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Params::Util    qw( _NONNEGINT );
 use Redis::CappedCollection qw(
+    $ENETWORK
     $NAMESPACE
     );
 
@@ -263,6 +264,10 @@ while ( 1 ) {
 }
 is $lists, $i - 1, 'data squeezed';
 
-$coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
+$coll->quit;
+dies_ok {
+    $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
+} "expecting to die: ";
+is $coll->last_errorcode, $ENETWORK, 'ENETWORK';
 
 }

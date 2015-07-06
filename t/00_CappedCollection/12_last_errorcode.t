@@ -240,11 +240,14 @@ $older_allowed = 0;
 new_connect();
 
 $list_key = $NAMESPACE.':D:*';
-foreach my $i ( 2..11 )
+foreach my $i ( 3..12 )
 {
     $id = $coll->insert( "Some id", $i, $i, $i );
 }
-eval { $id = $coll->insert( "Some id", 123, '*', 1 ) };
+eval { $id = $coll->insert( "Some id", 123, '*', 2 ) };
+is $coll->last_errorcode, $ENOERROR, "ENOERROR";
+$coll->pop_oldest;
+eval { $id = $coll->insert( "Some id", 234, '*', 1 ) };
 is $coll->last_errorcode, $EOLDERTHANALLOWED, "EOLDERTHANALLOWED";
 note '$@: ', $@;
 

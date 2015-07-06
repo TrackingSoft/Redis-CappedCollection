@@ -232,6 +232,8 @@ sub verifying {
 
 #-- Insert ---------------------------------------------------------------------
 
+my $prev_time = 0;
+my $time_grows = 0;
 foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
     foreach my $current_advance_cleanup_num ( 0, 100, 10_000 ) {
         new_connection(
@@ -247,6 +249,7 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
         $list_id = 'Some list_id';
         @operation_times = ();
         $inserts = 1_000;
+        ok $COLLECTION->collection_info->{last_removed_time} == 0, 'OK last_removed_time before';
         for ( 1 .. $inserts ) {
             my $data_time = Time::HiRes::time;
             my $data_id = $data_time;
@@ -254,9 +257,15 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
             $COLLECTION->_DEBUG( $data_time );
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
+        my $last_removed_time = $COLLECTION->collection_info->{last_removed_time};
+        ok $last_removed_time > 0, 'OK last_removed_time after';
+        ok $last_removed_time >= $prev_time, 'OK last_removed_time';
+        ++$time_grows if $last_removed_time > $prev_time;
+        $prev_time = $last_removed_time;
         verifying( 'insert' );
     }
 }
+ok $time_grows, 'last_removed_time grows';
 
 #-- Update ---------------------------------------------------------------------
 

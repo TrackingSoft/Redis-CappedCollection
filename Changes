@@ -1,9 +1,13 @@
 Revision history for Redis::CappedCollection module
 
-1.01  ??? ???  ?? 2015
+1.01  Tue Jul  07 2015
+    CHANGES:
+    - Updated behaviour of 'older_allowed' attribute that controls adding an element that's
+      older than the last element removed from collection.
+    - Added 'clear_collection' method.
     FIXES:
-    - Small documentation and MANIFEST correction.
-    - Small correction in destruction.
+    - Small correction in destruction procedure.
+    - Fixes of documentation and MANIFEST.
 
 1.00  Mon Jun  15 2015
 

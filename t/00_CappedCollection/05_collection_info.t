@@ -99,6 +99,7 @@ is $info->{older_allowed},      0,      "OK older_allowed";             # defaul
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $coll->oldest_time,          undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
+is $info->{last_removed_time},  0,      'OK last_removed_time';
 
 dies_ok { Redis::CappedCollection->collection_info() } "expecting to die";
 
@@ -122,6 +123,10 @@ for ( my $i = 1; $i <= 10; ++$i )
 $coll->_call_redis( 'HDEL', $status_key, 'data_version' );
 $info = $coll->collection_info;
 is $info->{data_version}, '0', 'OK data_version';
+
+$coll->pop_oldest;
+$info = $coll->collection_info;
+ok $info->{last_removed_time} > 0, 'OK last_removed_time';
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
@@ -194,7 +199,21 @@ $info = $coll->collection_info;
 is $info->{older_allowed},      0,      "OK older_allowed";
 ok $coll->resize( size => 20, older_allowed => 1 ), 'resized';
 $info = $coll->collection_info;
+
 is $info->{older_allowed},      1,      "OK older_allowed";
+$coll->pop_oldest;
+$info = $coll->collection_info;
+ok $info->{last_removed_time} > 0, 'OK last_removed_time';
+$coll->insert( "id", $data_id++, 'Stuff', 3 );
+$info = $coll->collection_info;
+is $info->{last_removed_time}, 0, 'OK last_removed_time';
+$coll->pop_oldest;
+$info = $coll->collection_info;
+ok $info->{last_removed_time} > 0, 'OK last_removed_time';
+$coll->update( "id", 1, '***', 2 );
+$info = $coll->collection_info;
+is $info->{last_removed_time}, 0, 'OK last_removed_time';
+
 dies_ok { $coll->resize() } "expecting to die";
 ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
 ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
