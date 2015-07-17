@@ -109,7 +109,7 @@ $coll->drop_collection;
 foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis   => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        redis   => $redis,
         name    => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }

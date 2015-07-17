@@ -35,6 +35,7 @@ use Time::HiRes     qw( gettimeofday );
 use Params::Util    qw( _NONNEGINT );
 use Redis::CappedCollection qw(
     $ENETWORK
+    $ENOERROR
     $NAMESPACE
     );
 
@@ -265,6 +266,19 @@ while ( 1 ) {
 is $lists, $i - 1, 'data squeezed';
 
 $coll->quit;
+lives_ok {
+    $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
+} "expecting to live: ";
+is $coll->last_errorcode, $ENOERROR, 'ENOERROR';
+
+$coll = Redis::CappedCollection->create(
+    redis   => { $redis->connect_info },    # HashRef
+    name    => $uuid->create_str,
+);
+isa_ok( $coll, 'Redis::CappedCollection' );
+
+$coll->quit;
+
 dies_ok {
     $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
 } "expecting to die: ";

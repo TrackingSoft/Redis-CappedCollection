@@ -7,7 +7,7 @@ Redis server setting) collections with FIFO data removal.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 1.01
+This documentation refers to C<Redis::CappedCollection> version 1.02
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '1.01';
+our $VERSION = '1.02';
 
 use Exporter qw(
     import
@@ -1360,7 +1360,7 @@ to work with the default settings if the corresponding arguments were not given.
 
 C<redis> argument can be either an existing object of L<Redis|Redis> class
 (which is then used for all communication with Redis server) or a hash reference used to create a
-new Redis object. See documentation of L<Redis|Redis> module for details.
+new internal Redis object. See documentation of L<Redis|Redis> module for details.
 
 C<create> takes arguments in key-value pairs.
 
@@ -1439,6 +1439,7 @@ sub BUILD {
     } else {    # $redis is hash ref
         $self->_server( $redis->{server} // "$DEFAULT_SERVER:$DEFAULT_PORT" );
         $self->_redis( $self->_redis_constructor( $redis ) );
+        $self->_use_external_connection( 0 );
     }
 
     if ( $self->_create_from_naked_new ) {
@@ -1551,13 +1552,18 @@ sub open {
 
     confess( 'Unknown arguments: ', join( ', ', keys %arguments ) ) if %arguments;
 
+    my $use_external_connection = ref( $params{redis} ) ne 'HASH';
     my $redis   = $params{redis} = _get_redis( $params{redis} );
     my $name    = $params{name};
     if ( collection_exists( redis => $redis, name => $name ) ) {
         my $info = collection_info( redis => $redis, name => $name );
         $info->{data_version} == $DATA_VERSION or confess $ERROR{ $EINCOMPDATAVERSION };
         $params{ $_ } = $info->{ $_ } foreach @_status_parameters;
-        return $class->new( %params, _create_from_naked_new => 0, _create_from_open => 1 );
+        return $class->new( %params,
+            _create_from_naked_new      => 0,
+            _create_from_open           => 1,
+            _use_external_connection    => $use_external_connection,
+        );
     } else {
         confess "Collection '$name' does not exist";
     };
@@ -2599,6 +2605,16 @@ This command is used to test if a connection is still alive.
 
 Returns 1 if a connection is still alive or 0 otherwise.
 
+External connections to the server object (eg, C <$redis = Redis->new( ... );>),
+and the collection object can continue to work after calling ping only if the method returned 1.
+
+If there is no connection to the Redis server (methods return 0), the connection to the server closes.
+In this case, to continue working with the collection,
+you must re-create the C<Redis::CappedCollection> object with the L</open> method.
+When using an external connection to the server,
+to check the connection to the server you can use the C<$redis->echo( ... )> call.
+This is useful to avoid closing the connection to the Redis server unintentionally.
+
 =cut
 sub ping {
     my ( $self ) = @_;
@@ -2621,6 +2637,11 @@ sub ping {
 
 Close the connection with the redis server.
 
+It does not close the connection to the Redis server if it is an external connection provided
+to collection constructor as existing L<Redis> object.
+When using an external connection (eg, C<$redis = Redis-> new (...);>),
+to close the connection to the Redis server, call C<$redis->quit> after calling this method.
+
 =cut
 sub quit {
     my ( $self ) = @_;
@@ -2629,11 +2650,13 @@ sub quit {
 
     $self->_set_last_errorcode( $ENOERROR );
     $self->_clear_sha1;
-    try {
-        $self->_redis->quit;
-    } catch {
-        $self->_redis_exception( $_ );
-    };
+    unless ( $self->_use_external_connection ) {
+        try {
+            $self->_redis->quit;
+        } catch {
+            $self->_redis_exception( $_ );
+        };
+    }
 }
 
 #-- private attributes ---------------------------------------------------------
@@ -2662,6 +2685,12 @@ has '_create_from_open'     => (
     is          => 'ro',
     isa         => 'Bool',
     default     => 0,
+);
+
+has '_use_external_connection'     => (
+    is          => 'rw',
+    isa         => 'Bool',
+    default     => 1,
 );
 
 has '_server'               => (

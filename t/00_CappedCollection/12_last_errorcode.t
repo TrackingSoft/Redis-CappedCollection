@@ -83,7 +83,7 @@ sub new_connect {
     isa_ok( $redis, 'Test::RedisServer' );
 
     $coll = Redis::CappedCollection->create(
-        redis           => $redis,
+        redis           => { $redis->connect_info },
         name            => $uuid->create_str,
         older_allowed   => $older_allowed,
         );

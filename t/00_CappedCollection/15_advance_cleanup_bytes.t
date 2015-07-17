@@ -128,7 +128,7 @@ is "@arr", "A B C D E F G H I J K", "correct value";
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis                   => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        redis                   => $redis,
         name                    => $uuid->create_str,
         advance_cleanup_bytes   => $arg,
         ) } "expecting to die: ".( $arg || '' );
@@ -137,7 +137,7 @@ foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 foreach my $arg ( ( undef, 0.04, 0.6, -1, -3, "", "0.6", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis           => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        redis           => $redis,
         name            => $uuid->create_str,
         memory_reserve  => $arg,
         ) } "expecting to die: ".( $arg || '' );

@@ -87,6 +87,16 @@ is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 ok $coll_1->_redis->ping, "server is available";
 $coll_1->quit;
+ok $coll_1->_redis->ping, "server OK";
+
+$coll_1 = Redis::CappedCollection->open(
+    redis   => { $redis->connect_info },
+    name    => "Some name",
+    );
+isa_ok( $coll_1, 'Redis::CappedCollection' );
+
+ok $coll_1->_redis->ping, "server is available";
+$coll_1->quit;
 ok !$coll_1->_redis->ping, "no server";
 
 my $coll_2 = Redis::CappedCollection->create(
@@ -111,7 +121,7 @@ is $info->{items},  0, "OK queue length - $info->{items}";
 #-- ping
 
 my $coll_3 = Redis::CappedCollection->create(
-    redis   => $redis,
+    redis   => { $redis->connect_info },
     name    => "Some next name",
     );
 isa_ok( $coll_3, 'Redis::CappedCollection' );

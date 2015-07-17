@@ -142,7 +142,7 @@ new_connect();
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
-        redis               => $DEFAULT_SERVER.":".Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+        redis               => $redis,
         name                => $uuid->create_str,
         advance_cleanup_num => $arg,
         ) } "expecting to die: ".( $arg || '' );

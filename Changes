@@ -1,5 +1,10 @@
 Revision history for Redis::CappedCollection module
 
+1.02  ??? ???  ?? 2015
+    CHANGES:
+    - Redis::CappedCollection->quit method does not close the connection
+      to the redis server if it was provided by the user.
+
 1.01  Tue Jul  07 2015
     CHANGES:
     - Updated behaviour of 'older_allowed' attribute that controls adding an element that's
