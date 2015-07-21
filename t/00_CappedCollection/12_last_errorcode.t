@@ -35,15 +35,15 @@ use Redis::CappedCollection qw(
     $DEFAULT_PORT
     $NAMESPACE
 
-    $ENOERROR
-    $EMISMATCHARG
-    $EDATATOOLARGE
-    $ENETWORK
-    $EMAXMEMORYLIMIT
-    $ECOLLDELETED
-    $EREDIS
-    $EDATAIDEXISTS
-    $EOLDERTHANALLOWED
+    $E_NO_ERROR
+    $E_MISMATCH_ARG
+    $E_DATA_TOO_LARGE
+    $E_NETWORK
+    $E_MAXMEMORY_LIMIT
+    $E_COLLECTION_DELETED
+    $E_REDIS
+    $E_DATA_ID_EXISTS
+    $E_OLDER_THAN_ALLOWED
     );
 use Time::HiRes;
 
@@ -119,18 +119,18 @@ $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
-#-- ENOERROR
+#-- E_NO_ERROR
 
-is $coll->last_errorcode, $ENOERROR, "ENOERROR";
+is $coll->last_errorcode, $E_NO_ERROR, "E_NO_ERROR";
 note '$@: ', $@;
 
-#-- EMISMATCHARG
+#-- E_MISMATCH_ARG
 
 eval { $coll->insert() };
-is $coll->last_errorcode, $EMISMATCHARG, "EMISMATCHARG";
+is $coll->last_errorcode, $E_MISMATCH_ARG, "E_MISMATCH_ARG";
 note '$@: ', $@;
 
-#-- EDATATOOLARGE
+#-- E_DATA_TOO_LARGE
 
 my $prev_max_datasize = $coll->max_datasize;
 my $max_datasize = 100;
@@ -138,22 +138,22 @@ $coll->max_datasize( $max_datasize );
 is $coll->max_datasize, $max_datasize, $msg;
 
 eval { $id = $coll->insert( 'List id', $data_id++, '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
+is $coll->last_errorcode, $E_DATA_TOO_LARGE, "E_DATA_TOO_LARGE";
 note '$@: ', $@;
 $coll->max_datasize( $prev_max_datasize );
 
-#-- ENETWORK
+#-- E_NETWORK
 
 $coll->quit;
 
 eval { $info = $coll->collection_info };
-is $coll->last_errorcode, $ENETWORK, "ENETWORK";
+is $coll->last_errorcode, $E_NETWORK, "E_NETWORK";
 note '$@: ', $@;
 ok !$coll->_redis->ping, "server is not available";
 
 new_connect();
 
-#-- EMAXMEMORYLIMIT
+#-- E_MAXMEMORY_LIMIT
 
     $maxmemory = 1024 * 1024;
     new_connect();
@@ -166,7 +166,7 @@ new_connect();
         eval { $id = $coll->insert( $i.'', $data_id++, $tmp ) };
         if ( $@ )
         {
-            is $coll->last_errorcode, $EMAXMEMORYLIMIT, "EMAXMEMORYLIMIT";
+            is $coll->last_errorcode, $E_MAXMEMORY_LIMIT, "E_MAXMEMORY_LIMIT";
             note "($i)", '$@: ', $@;
             last;
         }
@@ -174,7 +174,7 @@ new_connect();
 
     $coll->drop_collection;
 
-#-- EMAXMEMORYPOLICY
+#-- E_MAXMEMORY_POLICY
 
 #    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
 #    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
@@ -183,9 +183,9 @@ new_connect();
 #    $policy = "volatile-ttl";       # -> remove the key with the nearest expire time (minor TTL)
 #    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
 
-    dies_ok { new_connect() } "expecting to die: EMAXMEMORYPOLICY";
+    dies_ok { new_connect() } "expecting to die: E_MAXMEMORY_POLICY";
 
-#-- ECOLLDELETED
+#-- E_COLLECTION_DELETED
 
 #    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
 #    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
@@ -203,25 +203,25 @@ new_connect();
     $coll->_call_redis( 'DEL', $status_key );
     eval { $id = $coll->insert( 'Next List id', $data_id++, '*' x 1024, Time::HiRes::time ) };
     ok $@, "exception";
-    is $coll->last_errorcode, $ECOLLDELETED, "ECOLLDELETED";
+    is $coll->last_errorcode, $E_COLLECTION_DELETED, "E_COLLECTION_DELETED";
     note '$@: ', $@;
     $coll->drop_collection;
 
-#-- EREDIS
+#-- E_REDIS
 
 eval { $coll->_call_redis( "BADTHING", "Anything" ) };
-is $coll->last_errorcode, $EREDIS, "EREDIS";
+is $coll->last_errorcode, $E_REDIS, "E_REDIS";
 note '$@: ', $@;
 
-#-- EDATAIDEXISTS
+#-- E_DATA_ID_EXISTS
 
 new_connect();
 $id = $coll->insert( "Some id", 123, '*' x 1024 );
 eval { $id = $coll->insert( "Some id", 123, '*' x 1024 ) };
-is $coll->last_errorcode, $EDATAIDEXISTS, "EDATAIDEXISTS";
+is $coll->last_errorcode, $E_DATA_ID_EXISTS, "E_DATA_ID_EXISTS";
 note '$@: ', $@;
 
-#-- EOLDERTHANALLOWED
+#-- E_OLDER_THAN_ALLOWED
 
 new_connect();
 
@@ -231,7 +231,7 @@ foreach my $i ( 1..( 10 ) )
     $id = $coll->insert( "Some id", $i, $i, $i );
 }
 eval { $id = $coll->insert( "Some id", 123, '*', 1 ) };
-is $coll->last_errorcode, $ENOERROR, "ENOERROR";
+is $coll->last_errorcode, $E_NO_ERROR, "E_NO_ERROR";
 note '$@: ', $@;
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
@@ -245,10 +245,10 @@ foreach my $i ( 3..12 )
     $id = $coll->insert( "Some id", $i, $i, $i );
 }
 eval { $id = $coll->insert( "Some id", 123, '*', 2 ) };
-is $coll->last_errorcode, $ENOERROR, "ENOERROR";
+is $coll->last_errorcode, $E_NO_ERROR, "E_NO_ERROR";
 $coll->pop_oldest;
 eval { $id = $coll->insert( "Some id", 234, '*', 1 ) };
-is $coll->last_errorcode, $EOLDERTHANALLOWED, "EOLDERTHANALLOWED";
+is $coll->last_errorcode, $E_OLDER_THAN_ALLOWED, "E_OLDER_THAN_ALLOWED";
 note '$@: ', $@;
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );

@@ -34,7 +34,7 @@ use Data::UUID;
 use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
-    $EINCOMPDATAVERSION
+    $E_INCOMP_DATA_VERSION
     $NAMESPACE
     );
 
@@ -106,8 +106,8 @@ $coll_1->_call_redis( 'HDEL', $NAMESPACE.':S:'.$coll_1->name, 'data_version' );
 eval { Redis::CappedCollection->open( redis => $coll_1->_redis, name => $coll_1->name ) };
 my $error = $@;
 ok $error, 'exception';
-my $error_msg = $Redis::CappedCollection::ERROR{ $EINCOMPDATAVERSION };
-like( $error, qr/$error_msg/, 'EINCOMPDATAVERSION' );
+my $error_msg = $Redis::CappedCollection::ERROR{ $E_INCOMP_DATA_VERSION };
+like( $error, qr/$error_msg/, 'E_INCOMP_DATA_VERSION' );
 note '$@: ', $error;
 
 $coll = Redis::CappedCollection->create( redis => $redis, name => $uuid->create_str );

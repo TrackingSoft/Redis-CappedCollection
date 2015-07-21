@@ -34,8 +34,8 @@ use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Params::Util    qw( _NONNEGINT );
 use Redis::CappedCollection qw(
-    $ENETWORK
-    $ENOERROR
+    $E_NETWORK
+    $E_NO_ERROR
     $NAMESPACE
     );
 
@@ -269,7 +269,7 @@ $coll->quit;
 lives_ok {
     $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
 } "expecting to live: ";
-is $coll->last_errorcode, $ENOERROR, 'ENOERROR';
+is $coll->last_errorcode, $E_NO_ERROR, 'E_NO_ERROR';
 
 $coll = Redis::CappedCollection->create(
     redis   => { $redis->connect_info },    # HashRef
@@ -282,6 +282,6 @@ $coll->quit;
 dies_ok {
     $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
 } "expecting to die: ";
-is $coll->last_errorcode, $ENETWORK, 'ENETWORK';
+is $coll->last_errorcode, $E_NETWORK, 'E_NETWORK';
 
 }

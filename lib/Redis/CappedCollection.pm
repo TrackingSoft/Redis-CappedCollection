@@ -34,18 +34,18 @@ our @EXPORT_OK  = qw(
     $MIN_MEMORY_RESERVE
     $MAX_MEMORY_RESERVE
 
-    $ENOERROR
-    $EMISMATCHARG
-    $EDATATOOLARGE
-    $ENETWORK
-    $EMAXMEMORYLIMIT
-    $EMAXMEMORYPOLICY
-    $ECOLLDELETED
-    $EREDIS
-    $EDATAIDEXISTS
-    $EOLDERTHANALLOWED
-    $ENONEXISTENTDATAID
-    $EINCOMPDATAVERSION
+    $E_NO_ERROR
+    $E_MISMATCH_ARG
+    $E_DATA_TOO_LARGE
+    $E_NETWORK
+    $E_MAXMEMORY_LIMIT
+    $E_MAXMEMORY_POLICY
+    $E_COLLECTION_DELETED
+    $E_REDIS
+    $E_DATA_ID_EXISTS
+    $E_OLDER_THAN_ALLOWED
+    $E_NONEXISTENT_DATA_ID
+    $E_INCOMP_DATA_VERSION
 );
 
 #-- load the modules -----------------------------------------------------------
@@ -233,37 +233,37 @@ Possible error codes:
 
 =over 3
 
-=item C<$ENOERROR>
+=item C<$E_NO_ERROR>
 
 0 - No error
 
 =cut
-const our $ENOERROR             => 0;
+const our $E_NO_ERROR           => 0;
 
-=item C<$EMISMATCHARG>
+=item C<$E_MISMATCH_ARG>
 
 1 - Invalid argument.
 
 Thrown by methods when there is a missing required argument or argument value is invalid.
 
 =cut
-const our $EMISMATCHARG         => 1;
+const our $E_MISMATCH_ARG       => 1;
 
-=item C<$EDATATOOLARGE>
+=item C<$E_DATA_TOO_LARGE>
 
 2 - Data is too large.
 
 =cut
-const our $EDATATOOLARGE        => 2;
+const our $E_DATA_TOO_LARGE     => 2;
 
-=item C<$ENETWORK>
+=item C<$E_NETWORK>
 
 3 - Error in connection to Redis server.
 
 =cut
-const our $ENETWORK             => 3;
+const our $E_NETWORK            => 3;
 
-=item C<$EMAXMEMORYLIMIT>
+=item C<$E_MAXMEMORY_LIMIT>
 
 4 - Command not allowed when used memory > 'maxmemory'.
 
@@ -271,36 +271,36 @@ This means that the command is not allowed when used memory > C<maxmemory>
 in the F<redis.conf> file.
 
 =cut
-const our $EMAXMEMORYLIMIT      => 4;
+const our $E_MAXMEMORY_LIMIT    => 4;
 
-=item C<$EMAXMEMORYPOLICY>
+=item C<$E_MAXMEMORY_POLICY>
 
 5 - Data may have been removed be by C<maxmemory-policy all*>.
 
 Thrown when collection is damaged by data removal using C<maxmemory-policy all*> in F<redis.conf>.
 
 =cut
-const our $EMAXMEMORYPOLICY     => 5;
+const our $E_MAXMEMORY_POLICY   => 5;
 
-=item C<$ECOLLDELETED>
+=item C<$E_COLLECTION_DELETED>
 
 6 - Collection was removed prior to use.
 
 This means that the system part of the collection was removed prior to use.
 
 =cut
-const our $ECOLLDELETED         => 6;
+const our $E_COLLECTION_DELETED => 6;
 
-=item C<$EREDIS>
+=item C<$E_REDIS>
 
 7 - Redis error message.
 
 This means that other Redis error message detected.
 
 =cut
-const our $EREDIS               => 7;
+const our $E_REDIS              => 7;
 
-=item C<$EDATAIDEXISTS>
+=item C<$E_DATA_ID_EXISTS>
 
 8 - Attempt to add data with an existing ID
 
@@ -308,9 +308,9 @@ This means that you are trying to insert data with an ID that is already in
 the data list.
 
 =cut
-const our $EDATAIDEXISTS        => 8;
+const our $E_DATA_ID_EXISTS     => 8;
 
-=item C<$EOLDERTHANALLOWED>
+=item C<$E_OLDER_THAN_ALLOWED>
 
 9 - Attempt to add outdated data
 
@@ -318,18 +318,18 @@ This means that you are trying to insert the data with the time older than
 the time of the oldest element currently stored in collection.
 
 =cut
-const our $EOLDERTHANALLOWED    => 9;
+const our $E_OLDER_THAN_ALLOWED => 9;
 
-=item C<$ENONEXISTENTDATAID>
+=item C<$E_NONEXISTENT_DATA_ID>
 
 10 - Attempt to access the elements missing in the collection.
 
 This means that you are trying to update data which does not exist.
 
 =cut
-const our $ENONEXISTENTDATAID   => 10;
+const our $E_NONEXISTENT_DATA_ID    => 10;
 
-=item C<$EINCOMPDATAVERSION>
+=item C<$E_INCOMP_DATA_VERSION>
 
 11 - Attempt to access the collection with incompatible data structure, created
 by an older or newer version of this module.
@@ -337,26 +337,26 @@ by an older or newer version of this module.
 =back
 
 =cut
-const our $EINCOMPDATAVERSION   => 11;
+const our $E_INCOMP_DATA_VERSION    => 11;
 
 our %ERROR = (
-    $ENOERROR           => 'No error',
-    $EMISMATCHARG       => 'Invalid argument',
-    $EDATATOOLARGE      => 'Data is too large',
-    $ENETWORK           => 'Error in connection to Redis server',
-    $EMAXMEMORYLIMIT    => "Command not allowed when used memory > 'maxmemory'",
-    $EMAXMEMORYPOLICY   => 'Data removed may be by maxmemory-policy all*',
-    $ECOLLDELETED       => 'Collection was removed prior to use',
-    $EREDIS             => 'Redis error message',
-    $EDATAIDEXISTS      => 'Attempt to add data to an existing ID',
-    $EOLDERTHANALLOWED  => 'Attempt to add data over outdated',
-    $ENONEXISTENTDATAID => 'Non-existent data id',
-    $EINCOMPDATAVERSION => 'Incompatible data version',
+    $E_NO_ERROR             => 'No error',
+    $E_MISMATCH_ARG         => 'Invalid argument',
+    $E_DATA_TOO_LARGE       => 'Data is too large',
+    $E_NETWORK              => 'Error in connection to Redis server',
+    $E_MAXMEMORY_LIMIT      => "Command not allowed when used memory > 'maxmemory'",
+    $E_MAXMEMORY_POLICY     => 'Data removed may be by maxmemory-policy all*',
+    $E_COLLECTION_DELETED   => 'Collection was removed prior to use',
+    $E_REDIS                => 'Redis error message',
+    $E_DATA_ID_EXISTS       => 'Attempt to add data to an existing ID',
+    $E_OLDER_THAN_ALLOWED   => 'Attempt to add data over outdated',
+    $E_NONEXISTENT_DATA_ID  => 'Non-existent data id',
+    $E_INCOMP_DATA_VERSION  => 'Incompatible data version',
 );
 
 const our $REDIS_ERROR_CODE         => 'ERR';
 const our $REDIS_MEMORY_ERROR_CODE  => 'OOM';
-const our $REDIS_MEMORY_ERROR_MSG   => "$REDIS_MEMORY_ERROR_CODE $ERROR{ $EMAXMEMORYLIMIT }.";
+const our $REDIS_MEMORY_ERROR_MSG   => "$REDIS_MEMORY_ERROR_CODE $ERROR{ $E_MAXMEMORY_LIMIT }.";
 const our $MAX_DATASIZE             => 512*1024*1024;   # A String value can be at max 512 Megabytes in length.
 const my $MAX_REMOVE_RETRIES        => 2;       # the number of remove retries when memory limit is near
 
@@ -601,7 +601,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
         do
             if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
                 -- Level 2 points the error to where the function that called error was called
-                error( 'Queue key does not exist', $EMAXMEMORYPOLICY )
+                error( 'Queue key does not exist', $E_MAXMEMORY_POLICY )
             end
 
             -- continue to work with the excess (requiring removal) data and for them using the prefix 'excess_'
@@ -834,12 +834,12 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return $ECOLLDELETED
+    return $E_COLLECTION_DELETED
 end
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
-    return $EDATAIDEXISTS
+    return $E_DATA_ID_EXISTS
 end
 
 -- Validating the time of new data, if required
@@ -847,7 +847,7 @@ local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_remove
 if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
-            return $EOLDERTHANALLOWED
+            return $E_OLDER_THAN_ALLOWED
         end
     end
 end
@@ -893,7 +893,7 @@ if data_time < last_removed_time then
     redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
 end
 
-return $ENOERROR
+return $E_NO_ERROR
 END_INSERT
 
 $lua_script_body{update} = <<"END_UPDATE";
@@ -916,19 +916,19 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return $ECOLLDELETED
+    return $E_COLLECTION_DELETED
 end
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return $ENONEXISTENTDATAID
+    return $E_NONEXISTENT_DATA_ID
 end
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
-    return $ENONEXISTENTDATAID
+    return $E_NONEXISTENT_DATA_ID
 end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
 if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
     if new_data_time < last_removed_time then
-        return $EOLDERTHANALLOWED
+        return $E_OLDER_THAN_ALLOWED
     end
 end
 
@@ -940,7 +940,7 @@ cleaning( list_id, data_id, 0 )
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
-    return $ENONEXISTENTDATAID
+    return $E_NONEXISTENT_DATA_ID
 end
 
 -- data to be changed were not removed
@@ -963,7 +963,7 @@ if new_data_time ~= 0 then
     end
 end
 
-return $ENOERROR
+return $E_NO_ERROR
 END_UPDATE
 
 $lua_script_body{receive} = <<"END_RECEIVE";
@@ -1018,10 +1018,10 @@ $_lua_status_key
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
     -- sort of a mistake
-    return { $ECOLLDELETED, nil, nil, nil }
+    return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
-    return { $ENOERROR, false, nil, nil }
+    return { $E_NO_ERROR, false, nil, nil }
 end
 
 -- initialize the data returned from the script
@@ -1040,7 +1040,7 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return { $EMAXMEMORYPOLICY, nil, nil, nil }
+    return { $E_MAXMEMORY_POLICY, nil, nil, nil }
 end
 
 -- Features the oldest data
@@ -1091,7 +1091,7 @@ end
 redis.call( 'HINCRBY', STATUS_KEY, 'items', -1 )
 redis.call( 'HSET', STATUS_KEY, 'last_removed_time', very_oldest_time )
 
-return { $ENOERROR, true, list_id, data }
+return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
 
 $lua_script_body{collection_info} = <<"END_COLLECTION_INFO";
@@ -1106,7 +1106,7 @@ $_lua_status_key
 
 -- determine whether there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $ECOLLDELETED, false, false, false, false, false, false, false }
+    return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
 end
 
 local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
@@ -1124,7 +1124,7 @@ local lists, items, older_allowed, advance_cleanup_bytes, advance_cleanup_num, m
 if type( data_version ) ~= 'string' then data_version = '0' end
 
 return {
-    $ENOERROR,
+    $E_NO_ERROR,
     lists,
     items,
     older_allowed,
@@ -1149,11 +1149,11 @@ $_lua_status_key
 
 -- determine whe, falther there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $ECOLLDELETED, false }
+    return { $E_COLLECTION_DELETED, false }
 end
 
 local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-return { $ENOERROR, oldest_time }
+return { $E_NO_ERROR, oldest_time }
 END_OLDEST_TIME
 
 $lua_script_body{list_info} = <<"END_LIST_INFO";
@@ -1171,10 +1171,10 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $ECOLLDELETED, false, nil }
+    return { $E_COLLECTION_DELETED, false, nil }
 end
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return { $ENOERROR, false, nil }
+    return { $E_NO_ERROR, false, nil }
 end
 
 -- the length of the data list
@@ -1183,7 +1183,7 @@ local items         = redis.call( 'HLEN', DATA_KEY )
 -- the second data
 local oldest_time   = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
 
-return { $ENOERROR, items, oldest_time }
+return { $E_NO_ERROR, items, oldest_time }
 END_LIST_INFO
 
 $lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
@@ -1243,10 +1243,10 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $ECOLLDELETED, 0 }
+    return { $E_COLLECTION_DELETED, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return { $ENOERROR, 0 }
+    return { $E_NO_ERROR, 0 }
 end
 
 -- initialize the data returned from the script
@@ -1272,7 +1272,7 @@ redis.call( 'HINCRBY', STATUS_KEY, 'lists', -1 )
 -- remove the name of the list from the queue collection
 redis.call( 'ZREM', QUEUE_KEY, list_id )
 
-return { $ENOERROR, 1 }
+return { $E_NO_ERROR, 1 }
 END_DROP_LIST
 
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
@@ -1429,9 +1429,8 @@ sub BUILD {
         # to test only
         # have to look into the Test::RedisServer object ...
         my $conf = $redis->conf;
-        my $server = '127.0.0.1:'.$conf->{port};
-        $conf->{server} = $server unless exists $conf->{server};
-        $self->_server( $server );
+        $conf->{server} = '127.0.0.1:'.$conf->{port} unless exists $conf->{server};
+        $self->_server( $conf->{server} );
         $self->_redis( Redis->new( %$conf ) );
     } elsif ( _INSTANCE( $redis, __PACKAGE__ ) ) {
         $self->_server( $redis->_server );
@@ -1453,7 +1452,7 @@ sub BUILD {
     if ( $self->_check_maxmemory ) {
         ( undef, $maxmemory ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory' );
         defined( _NONNEGINT( $maxmemory ) )
-            or $self->_throw( $ENETWORK );
+            or $self->_throw( $E_NETWORK );
     } else {
         # 0 means all system memory
         $maxmemory = 0;
@@ -1461,14 +1460,14 @@ sub BUILD {
 
     my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
     if ( $major < 2 || ( $major == 2 && $minor < 8 ) ) {
-        $self->_set_last_errorcode( $EREDIS );
+        $self->_set_last_errorcode( $E_REDIS );
         confess "Need a Redis server version 2.8 or higher";
     }
 
     if ( $self->_check_maxmemory ) {
         $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
         if ( !$self->_create_from_open && $self->_maxmemory_policy =~ /^all/ ) {
-            $self->_throw( $EMAXMEMORYPOLICY );
+            $self->_throw( $E_MAXMEMORY_POLICY );
         }
     } else {
         # redis.conf :
@@ -1557,7 +1556,7 @@ sub open {
     my $name    = $params{name};
     if ( collection_exists( redis => $redis, name => $name ) ) {
         my $info = collection_info( redis => $redis, name => $name );
-        $info->{data_version} == $DATA_VERSION or confess $ERROR{ $EINCOMPDATAVERSION };
+        $info->{data_version} == $DATA_VERSION or confess $ERROR{ $E_INCOMP_DATA_VERSION };
         $params{ $_ } = $info->{ $_ } foreach @_status_parameters;
         return $class->new( %params,
             _create_from_naked_new      => 0,
@@ -1628,7 +1627,7 @@ has 'advance_cleanup_bytes' => (
     default     => 0,
     trigger     => sub {
         my $self = shift;
-        !$self->_maxmemory || ( $self->advance_cleanup_bytes <= $self->maxmemory || $self->_throw( $EMISMATCHARG, 'advance_cleanup_bytes' ) );
+        !$self->_maxmemory || ( $self->advance_cleanup_bytes <= $self->maxmemory || $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_bytes' ) );
     },
 );
 
@@ -1678,7 +1677,7 @@ has 'max_datasize'          => (
     trigger     => sub {
         my $self = shift;
         $self->max_datasize <= ( $self->_maxmemory ? min( $self->_maxmemory, $MAX_DATASIZE ) : $MAX_DATASIZE )
-            || $self->_throw( $EMISMATCHARG, 'max_datasize' );
+            || $self->_throw( $E_MISMATCH_ARG, 'max_datasize' );
     },
 );
 
@@ -1720,7 +1719,7 @@ has 'memory_reserve'        => (
         my $self = shift;
         my $memory_reserve = $self->memory_reserve;
         ( _NUMBER( $memory_reserve ) && $memory_reserve >= $MIN_MEMORY_RESERVE && $memory_reserve <= $MAX_MEMORY_RESERVE )
-                || $self->_throw( $EMISMATCHARG, 'memory_reserve' );
+                || $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
     },
 );
 
@@ -1792,17 +1791,17 @@ sub insert {
     my $data        = shift;
     my $data_time   = shift // time;
 
-    $data                                                   // $self->_throw( $EMISMATCHARG, 'data' );
-    ( defined( _STRING( $data ) ) || $data eq '' )          || $self->_throw( $EMISMATCHARG, 'data' );
-    _STRING( $list_id )                                     // $self->_throw( $EMISMATCHARG, 'list_id' );
-    $list_id !~ /:/                                         || $self->_throw( $EMISMATCHARG, 'list_id' );
-    defined( _STRING( $data_id ) )                          || $self->_throw( $EMISMATCHARG, 'data_id' );
-    ( defined( _NUMBER( $data_time ) ) && $data_time > 0 )  || $self->_throw( $EMISMATCHARG, 'data_time' );
+    $data                                                   // $self->_throw( $E_MISMATCH_ARG, 'data' );
+    ( defined( _STRING( $data ) ) || $data eq '' )          || $self->_throw( $E_MISMATCH_ARG, 'data' );
+    _STRING( $list_id )                                     // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    $list_id !~ /:/                                         || $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    defined( _STRING( $data_id ) )                          || $self->_throw( $E_MISMATCH_ARG, 'data_id' );
+    ( defined( _NUMBER( $data_time ) ) && $data_time > 0 )  || $self->_throw( $E_MISMATCH_ARG, 'data_time' );
 
     my $data_len = bytes::length( $data );
-    ( $data_len <= $self->max_datasize )                    || $self->_throw( $EDATATOOLARGE );
+    ( $data_len <= $self->max_datasize )                    || $self->_throw( $E_DATA_TOO_LARGE );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my $error = $self->_call_redis(
         $self->_lua_script_cmd( 'insert' ),
@@ -1815,8 +1814,8 @@ sub insert {
         $self->_DEBUG,
     );
 
-    $self->_clear_sha1 if $error == $ECOLLDELETED;
-    $self->_throw( $error ) if $error != $ENOERROR;
+    $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+    $self->_throw( $error ) if $error != $E_NO_ERROR;
 
     return $list_id;
 }
@@ -1871,21 +1870,21 @@ sub update {
     my $data_id = shift;
     my $data    = shift;
 
-    _STRING( $list_id )                             // $self->_throw( $EMISMATCHARG, 'list_id' );
-    defined( _STRING( $data_id ) )                  || $self->_throw( $EMISMATCHARG, 'data_id' );
-    $data                                           // $self->_throw( $EMISMATCHARG, 'data' );
-    ( defined( _STRING( $data ) ) || $data eq '' )  || $self->_throw( $EMISMATCHARG, 'data' );
+    _STRING( $list_id )                             // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    defined( _STRING( $data_id ) )                  || $self->_throw( $E_MISMATCH_ARG, 'data_id' );
+    $data                                           // $self->_throw( $E_MISMATCH_ARG, 'data' );
+    ( defined( _STRING( $data ) ) || $data eq '' )  || $self->_throw( $E_MISMATCH_ARG, 'data' );
 
     my $new_data_time;
     if ( @_ ) {
         $new_data_time = shift;
-        ( defined( _NUMBER( $new_data_time ) ) && $new_data_time > 0 ) || $self->_throw( $EMISMATCHARG, 'new_data_time' );
+        ( defined( _NUMBER( $new_data_time ) ) && $new_data_time > 0 ) || $self->_throw( $E_MISMATCH_ARG, 'new_data_time' );
     }
 
     my $data_len = bytes::length( $data );
-    ( $data_len <= $self->max_datasize )            || $self->_throw( $EDATATOOLARGE );
+    ( $data_len <= $self->max_datasize )            || $self->_throw( $E_DATA_TOO_LARGE );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my $error = $self->_call_redis(
         $self->_lua_script_cmd( 'update' ),
@@ -1898,13 +1897,13 @@ sub update {
         $self->_DEBUG,
     );
 
-    if ( $error == $ENONEXISTENTDATAID ) {
+    if ( $error == $E_NONEXISTENT_DATA_ID ) {
         return 0;
-    } elsif ( $error == $ENOERROR ) {
+    } elsif ( $error == $E_NO_ERROR ) {
         return 1;
     }
 
-    $self->_clear_sha1 if $error == $ECOLLDELETED;
+    $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
     $self->_throw( $error );
 }
 
@@ -1952,12 +1951,12 @@ If the data with C<$data_id> ID does not exist, C<undef> is returned.
 sub receive {
     my ( $self, $list_id, $data_id ) = @_;
 
-    _STRING( $list_id ) // $self->_throw( $EMISMATCHARG, 'list_id' );
+    _STRING( $list_id ) // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     if ( defined( $data_id ) && $data_id ne '' ) {
-        _STRING( $data_id ) // $self->_throw( $EMISMATCHARG, 'data_id' );
+        _STRING( $data_id ) // $self->_throw( $E_MISMATCH_ARG, 'data_id' );
         return $self->_call_redis(
             $self->_lua_script_cmd( 'receive' ),
             0,
@@ -2013,7 +2012,7 @@ sub pop_oldest {
     my ( $self ) = @_;
 
     my @ret;
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my ( $error, $queue_exist, $excess_id, $excess_data ) =
         $self->_call_redis(
@@ -2022,8 +2021,8 @@ sub pop_oldest {
             $self->name,
         );
 
-    $self->_clear_sha1 if $error == $ECOLLDELETED || $error == $EMAXMEMORYPOLICY;
-    $self->_throw( $error ) if $error != $ENOERROR;
+    $self->_clear_sha1 if $error == $E_COLLECTION_DELETED || $error == $E_MAXMEMORY_POLICY;
+    $self->_throw( $error ) if $error != $E_NO_ERROR;
 
     @ret = ( $excess_id, $excess_data ) if $queue_exist;
 
@@ -2116,7 +2115,7 @@ sub collection_info {
     if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
         my $self   = shift;
 
-        $self->_set_last_errorcode( $ENOERROR );
+        $self->_set_last_errorcode( $E_NO_ERROR );
 
         @ret = $self->_call_redis(
             $self->_lua_script_cmd( 'collection_info' ),
@@ -2124,8 +2123,8 @@ sub collection_info {
             $self->name,
         );
 
-        if ( ( $error = shift( @ret ) ) != $ENOERROR ) {
-            $self->_clear_sha1 if $error == $ECOLLDELETED;
+        if ( ( $error = shift( @ret ) ) != $E_NO_ERROR ) {
+            $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
             $self->_throw( $error );
         }
     } else {
@@ -2148,7 +2147,7 @@ sub collection_info {
             $name,
         );
 
-        if ( ( $error = shift( @ret ) ) != $ENOERROR ) {
+        if ( ( $error = shift( @ret ) ) != $E_NO_ERROR ) {
             confess "Collection '$name.' info not received (".$ERROR{ $error }.')';
         }
     }
@@ -2191,9 +2190,9 @@ C<undef> if the data list does not exist.
 sub list_info {
     my ( $self, $list_id ) = @_;
 
-    _STRING( $list_id ) // $self->_throw( $EMISMATCHARG, 'list_id' );
+    _STRING( $list_id ) // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'list_info' ),
@@ -2202,8 +2201,8 @@ sub list_info {
         $list_id,
     );
 
-    if ( ( my $error = shift( @ret ) ) != $ENOERROR ) {
-        $self->_clear_sha1 if $error == $ECOLLDELETED;
+    if ( ( my $error = shift( @ret ) ) != $E_NO_ERROR ) {
+        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error );
     }
 
@@ -2226,7 +2225,7 @@ An error exception is thrown (C<confess>) if the collection does not exist.
 sub oldest_time {
     my $self   = shift;
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'oldest_time' ),
@@ -2234,8 +2233,8 @@ sub oldest_time {
         $self->name,
     );
 
-    if ( ( my $error = shift( @ret ) ) != $ENOERROR ) {
-        $self->_clear_sha1 if $error == $ECOLLDELETED;
+    if ( ( my $error = shift( @ret ) ) != $E_NO_ERROR ) {
+        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error );
     }
 
@@ -2255,9 +2254,9 @@ Returns true if the list exists and false otherwise.
 sub list_exists {
     my ( $self, $list_id ) = @_;
 
-    _STRING( $list_id ) // $self->_throw( $EMISMATCHARG, 'list_id' );
+    _STRING( $list_id ) // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
 }
@@ -2353,9 +2352,9 @@ sub lists {
     my $self        = shift;
     my $pattern     = shift // '*';
 
-    _STRING( $pattern ) // $self->_throw( $EMISMATCHARG, 'pattern' );
+    _STRING( $pattern ) // $self->_throw( $E_MISMATCH_ARG, 'pattern' );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     return map { ( $_ =~ /:([^:]+)$/ )[0] } $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
 }
@@ -2411,9 +2410,9 @@ sub resize {
     unless ( $requested_changes ) {
         my $error = 'One or more parameters are required';
         if ( $self ) {
-            $self->_throw( $EMISMATCHARG, $error );
+            $self->_throw( $E_MISMATCH_ARG, $error );
         } else {
-            confess "$error : ".$ERROR{ $EMISMATCHARG }.')'
+            confess "$error : ".$ERROR{ $E_MISMATCH_ARG }.')'
         }
     }
 
@@ -2455,9 +2454,9 @@ sub resize {
             } else {
                 my $msg = "Parameter $parameter not updated to '$new_val' for collection '$name'";
                 if ( $self ) {
-                    $self->_throw( $ECOLLDELETED, $msg );
+                    $self->_throw( $E_COLLECTION_DELETED, $msg );
                 } else {
-                    confess "$msg (".$ERROR{ $ECOLLDELETED }.')';
+                    confess "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')';
                 }
             }
         }
@@ -2499,7 +2498,7 @@ sub drop_collection {
     if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
         my $self = shift;
 
-        $self->_set_last_errorcode( $ENOERROR );
+        $self->_set_last_errorcode( $E_NO_ERROR );
 
         $ret = $self->_call_redis(
             $self->_lua_script_cmd( 'drop_collection' ),
@@ -2544,9 +2543,9 @@ Method returns true if the list is removed, or false otherwise.
 sub drop_list {
     my ( $self, $list_id ) = @_;
 
-    _STRING( $list_id ) // $self->_throw( $EMISMATCHARG, 'list_id' );
+    _STRING( $list_id ) // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my ( $error, $ret ) = $self->_call_redis(
         $self->_lua_script_cmd( 'drop_list' ),
@@ -2555,8 +2554,8 @@ sub drop_list {
         $list_id,
     );
 
-    if ( $error  != $ENOERROR ) {
-        $self->_clear_sha1 if $error == $ECOLLDELETED;
+    if ( $error  != $E_NO_ERROR ) {
+        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error );
     }
 
@@ -2586,7 +2585,7 @@ sub clear_collection {
 
     my $ret;
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     $ret = $self->_call_redis(
         $self->_lua_script_cmd( 'clear_collection' ),
@@ -2619,7 +2618,7 @@ This is useful to avoid closing the connection to the Redis server unintentional
 sub ping {
     my ( $self ) = @_;
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my $ret;
     try {
@@ -2648,7 +2647,7 @@ sub quit {
 
     return if $] >= 5.14 && ${^GLOBAL_PHASE} eq 'DESTRUCT';
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
     $self->_clear_sha1;
     unless ( $self->_use_external_connection ) {
         try {
@@ -2657,6 +2656,8 @@ sub quit {
             $self->_redis_exception( $_ );
         };
     }
+
+    return;
 }
 
 #-- private attributes ---------------------------------------------------------
@@ -2800,7 +2801,7 @@ sub _time_list_key {
 sub _verify_collection {
     my ( $self ) = @_;
 
-    $self->_set_last_errorcode( $ENOERROR );
+    $self->_set_last_errorcode( $E_NO_ERROR );
 
     my ( $status_exist, $older_allowed, $advance_cleanup_bytes, $advance_cleanup_num, $memory_reserve, $data_version ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
@@ -2815,11 +2816,11 @@ sub _verify_collection {
     if ( $status_exist ) {
         $self->advance_cleanup_bytes( $advance_cleanup_bytes )  unless $self->advance_cleanup_bytes;
         $self->advance_cleanup_num( $advance_cleanup_num )      unless $self->advance_cleanup_num;
-        $older_allowed          == $self->older_allowed         or $self->_throw( $EMISMATCHARG, 'older_allowed' );
-        $advance_cleanup_bytes  == $self->advance_cleanup_bytes or $self->_throw( $EMISMATCHARG, 'advance_cleanup_bytes' );
-        $advance_cleanup_num    == $self->advance_cleanup_num   or $self->_throw( $EMISMATCHARG, 'advance_cleanup_num' );
-        $memory_reserve         == $self->memory_reserve        or $self->_throw( $EMISMATCHARG, 'memory_reserve' );
-        $data_version           == $DATA_VERSION                or $self->_throw( $EINCOMPDATAVERSION );
+        $older_allowed          == $self->older_allowed         or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
+        $advance_cleanup_bytes  == $self->advance_cleanup_bytes or $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_bytes' );
+        $advance_cleanup_num    == $self->advance_cleanup_num   or $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_num' );
+        $memory_reserve         == $self->memory_reserve        or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
+        $data_version           == $DATA_VERSION                or $self->_throw( $E_INCOMP_DATA_VERSION );
     }
 }
 
@@ -2845,16 +2846,16 @@ sub _redis_exception {
                 || $error =~ /^Error while reading from Redis server: /
                 || $error =~ /^Redis server closed connection/
             ) {
-            $self->_set_last_errorcode( $ENETWORK );
+            $self->_set_last_errorcode( $E_NETWORK );
         } elsif (
                    $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_MEMORY_ERROR_MSG\E/i
-                || $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_ERROR_CODE $ERROR{ $EMAXMEMORYLIMIT }\E/i
+                || $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_ERROR_CODE $ERROR{ $E_MAXMEMORY_LIMIT }\E/i
                 || $error =~ /^\[[^]]+\]\s+-NOSCRIPT No matching script. Please use EVAL./
             ) {
-            $self->_set_last_errorcode( $EMAXMEMORYLIMIT );
+            $self->_set_last_errorcode( $E_MAXMEMORY_LIMIT );
             $self->_clear_sha1;
         } else {
-            $self->_set_last_errorcode( $EREDIS );
+            $self->_set_last_errorcode( $E_REDIS );
         }
     } else {
         # nothing to do now
@@ -2875,7 +2876,7 @@ sub _redis_constructor {
         $self               = shift;
         $redis_parameters   = shift;
 
-        $self->_set_last_errorcode( $ENOERROR );
+        $self->_set_last_errorcode( $E_NO_ERROR );
         $redis = try {
             Redis->new( %$redis_parameters );
         } catch {
@@ -2908,7 +2909,7 @@ sub _call_redis {
     }
     my $method  = shift;
 
-    $self->_set_last_errorcode( $ENOERROR ) if $self;
+    $self->_set_last_errorcode( $E_NO_ERROR ) if $self;
 
     my @return;
     my @args = @_;
@@ -2947,8 +2948,8 @@ into the L</last_errorcode> and throw an exception (C<confess>).
 Unidentified errors also throw exceptions but L</last_errorcode> is not set.
 
 In addition to errors in the L<Redis|Redis> module, detected errors are
-L</$EMISMATCHARG>, L</$EDATATOOLARGE>, L</$EMAXMEMORYPOLICY>, L</$ECOLLDELETED>,
-L</$EDATAIDEXISTS>, L</$EOLDERTHANALLOWED>, L</$ENONEXISTENTDATAID>.
+L</$E_MISMATCH_ARG>, L</$E_DATA_TOO_LARGE>, L</$E_MAXMEMORY_POLICY>, L</$E_COLLECTION_DELETED>,
+L</$E_DATA_ID_EXISTS>, L</$E_OLDER_THAN_ALLOWED>, L</$E_NONEXISTENT_DATA_ID>.
 
 The user has the choice:
 
@@ -2979,14 +2980,14 @@ An example of error handling.
         $DEFAULT_SERVER
         $DEFAULT_PORT
 
-        $ENOERROR
-        $EMISMATCHARG
-        $EDATATOOLARGE
-        $ENETWORK
-        $EMAXMEMORYLIMIT
-        $EMAXMEMORYPOLICY
-        $ECOLLDELETED
-        $EREDIS
+        $E_NO_ERROR
+        $E_MISMATCH_ARG
+        $E_DATA_TOO_LARGE
+        $E_NETWORK
+        $E_MAXMEMORY_LIMIT
+        $E_MAXMEMORY_POLICY
+        $E_COLLECTION_DELETED
+        $E_REDIS
     );
 
     # Error handling
@@ -2995,33 +2996,33 @@ An example of error handling.
         my $err     = shift;
 
         die $err unless $coll;
-        if ( $coll->last_errorcode == $ENOERROR ) {
+        if ( $coll->last_errorcode == $E_NO_ERROR ) {
             # For example, to ignore
             return unless $err;
-        } elsif ( $coll->last_errorcode == $EMISMATCHARG ) {
+        } elsif ( $coll->last_errorcode == $E_MISMATCH_ARG ) {
             # Necessary to correct the code
-        } elsif ( $coll->last_errorcode == $EDATATOOLARGE ) {
+        } elsif ( $coll->last_errorcode == $E_DATA_TOO_LARGE ) {
             # Limit data length
-        } elsif ( $coll->last_errorcode == $ENETWORK ) {
+        } elsif ( $coll->last_errorcode == $E_NETWORK ) {
             # For example, sleep
             #sleep 60;
             # and return code to repeat the operation
             #return 'to repeat';
-        } elsif ( $coll->last_errorcode == $EMAXMEMORYLIMIT ) {
+        } elsif ( $coll->last_errorcode == $E_MAXMEMORY_LIMIT ) {
             # For example, return code to restart the server
             #return 'to restart the redis server';
-        } elsif ( $coll->last_errorcode == $EMAXMEMORYPOLICY ) {
+        } elsif ( $coll->last_errorcode == $E_MAXMEMORY_POLICY ) {
             # For example, return code to reinsert the data
             #return "to reinsert look at $err";
-        } elsif ( $coll->last_errorcode == $ECOLLDELETED ) {
+        } elsif ( $coll->last_errorcode == $E_COLLECTION_DELETED ) {
             # For example, return code to ignore
             #return "to ignore $err";
-        } elsif ( $coll->last_errorcode == $EREDIS ) {
+        } elsif ( $coll->last_errorcode == $E_REDIS ) {
             # Independently analyze the $err
-        } elsif ( $coll->last_errorcode == $EDATAIDEXISTS ) {
+        } elsif ( $coll->last_errorcode == $E_DATA_ID_EXISTS ) {
             # For example, return code to reinsert the data
             #return "to reinsert with new data ID";
-        } elsif ( $coll->last_errorcode == $EOLDERTHANALLOWED ) {
+        } elsif ( $coll->last_errorcode == $E_OLDER_THAN_ALLOWED ) {
             # Independently analyze the situation
         } else {
             # Unknown error code

@@ -34,7 +34,7 @@ use Data::UUID;
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     $NAMESPACE
-    $ECOLLDELETED
+    $E_COLLECTION_DELETED
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -100,7 +100,7 @@ for ( my $i = 1; $i <= 10; ++$i )
         eval { $info = $coll->collection_info; };
         if ( $@ )
         {
-            ok( ( $coll->last_errorcode == $ECOLLDELETED and $i == 10 and $j == 10 ), "expecting to die" );
+            ok( ( $coll->last_errorcode == $E_COLLECTION_DELETED and $i == 10 and $j == 10 ), "expecting to die" );
         }
         else
         {

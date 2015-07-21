@@ -2,7 +2,7 @@
 #TODO: to develop tests
 # - memory errors (working with ROLLBACK)
 # - with maxmemory = 0
-# - $ENONEXISTENTDATAID error
+# - $E_NONEXISTENT_DATA_ID error
 
 
 use 5.010;
@@ -45,9 +45,9 @@ use Time::HiRes ();
 use Redis::CappedCollection qw(
     $DEFAULT_PORT
     $DEFAULT_SERVER
-    $EMAXMEMORYLIMIT
-    $ENONEXISTENTDATAID
-    $EREDIS
+    $E_MAXMEMORY_LIMIT
+    $E_NONEXISTENT_DATA_ID
+    $E_REDIS
     $NAMESPACE
 );
 use Redis::CappedCollection::Test::Utils qw(
@@ -310,12 +310,12 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
         eval { $COLLECTION->update( $list_id, $data_id, $stuff ) };
         my $error = $@;
         ok $error, 'exception';
-        is $COLLECTION->last_errorcode, $EREDIS, 'EREDIS';
-        my $error_msg = $Redis::CappedCollection::ERROR{ $EMAXMEMORYLIMIT };
-        like( $error, qr/$error_msg/, 'EMAXMEMORYLIMIT' );
+        is $COLLECTION->last_errorcode, $E_REDIS, 'E_REDIS';
+        my $error_msg = $Redis::CappedCollection::ERROR{ $E_MAXMEMORY_LIMIT };
+        like( $error, qr/$error_msg/, 'E_MAXMEMORY_LIMIT' );
         note '$@: ', $error;
 
-        #-- $ENONEXISTENTDATAID
+        #-- $E_NONEXISTENT_DATA_ID
         $data_id = 99999999;
         ok !$COLLECTION->update( $list_id, $data_id, $stuff ), 'data not exists';
 #TODO:

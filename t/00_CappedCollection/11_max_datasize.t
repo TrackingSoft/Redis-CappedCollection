@@ -34,7 +34,7 @@ use Data::UUID;
 use Redis::CappedCollection qw(
     $NAMESPACE
 
-    $EDATATOOLARGE
+    $E_DATA_TOO_LARGE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -122,14 +122,14 @@ $coll->max_datasize( $max_datasize );
 is $coll->max_datasize, $max_datasize, $msg;
 
 eval { $id = $coll->insert( 'List id', $data_id, '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
+is $coll->last_errorcode, $E_DATA_TOO_LARGE, "E_DATA_TOO_LARGE";
 note '$@: ', $@;
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
-is $coll->last_errorcode, $EDATATOOLARGE, "EDATATOOLARGE";
+is $coll->last_errorcode, $E_DATA_TOO_LARGE, "E_DATA_TOO_LARGE";
 note '$@: ', $@;
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
