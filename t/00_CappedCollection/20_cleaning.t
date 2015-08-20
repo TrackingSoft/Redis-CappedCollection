@@ -82,7 +82,10 @@ my (
 );
 
 ( $REDIS_SERVER, $ERROR_MSG ) = verify_redis();
-plan( skip_all => $ERROR_MSG ) unless $REDIS_SERVER;
+unless ( $REDIS_SERVER ) {
+    diag $ERROR_MSG;
+    exit;
+}
 
 sub new_connection {
     my ( $name, $maxmemory, $advance_cleanup_bytes, $advance_cleanup_num, $memory_reserve ) = @_;

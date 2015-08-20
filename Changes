@@ -5,6 +5,8 @@ Revision history for Redis::CappedCollection module
     - Redis::CappedCollection does not close connection to redis server (including '->quit' method)
       if it was provided by user.
     - More convenient error codes naming.
+    FIXES:
+    - Fixes of test plans.
 
 1.01  Tue Jul  07 2015
     CHANGES:

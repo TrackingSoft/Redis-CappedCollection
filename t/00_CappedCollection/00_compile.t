@@ -6,7 +6,8 @@ use warnings;
 
 use lib 'lib';
 
-use Test::More tests => 25;
+use Test::More;
+plan "no_plan";
 
 BEGIN {
     eval 'use Test::NoWarnings';    ## no critic
