@@ -82,10 +82,10 @@ my (
 );
 
 ( $REDIS_SERVER, $ERROR_MSG ) = verify_redis();
-unless ( $REDIS_SERVER ) {
-    diag $ERROR_MSG;
-    exit;
-}
+
+SKIP: {
+    diag $ERROR_MSG if $ERROR_MSG;
+    skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
 sub new_connection {
     my ( $name, $maxmemory, $advance_cleanup_bytes, $advance_cleanup_num, $memory_reserve ) = @_;
@@ -102,7 +102,7 @@ sub new_connection {
             $maxmemory ? ( maxmemory => $maxmemory ) : ( maxmemory => 0 ),
         },
     );
-    plan( skip_all => $ERROR_MSG ) unless $REDIS_SERVER;
+    skip( $ERROR_MSG, 1 ) unless $REDIS_SERVER;
     isa_ok( $REDIS_SERVER, 'Test::RedisServer' );
     $REDIS_LOG = File::Spec->catfile( $REDIS_SERVER->tmpdir, 'redis-server.log' );
 
@@ -362,3 +362,5 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
 #$stuff = '@' x ( int( $MAXMEMORY / $MEMORY_RESERVE_COEFFICIENT ) - 1 );
 #$COLLECTION->update( $list_id, $data_id, $stuff );
 #verifying( 'update' );
+
+}
