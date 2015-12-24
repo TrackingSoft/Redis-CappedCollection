@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     $NAMESPACE
@@ -86,6 +89,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists";
 is $info->{items},  $len,   "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 my $prev_time = 0;
 my $time_grows = 0;
@@ -106,6 +110,7 @@ for ( my $i = 1; $i <= 10; ++$i )
         {
             is $info->{lists},  10 - $i + ( $j == 10 ? 0: 1 ),      "OK lists";
             is $info->{items},  --$len,                             "OK items";
+            ok defined( _NUMBER( $info->{last_removed_time} ) ), 'last_removed_time OK';
             ok $info->{last_removed_time} >= $prev_time,             'OK last_removed_time';
             ++$time_grows if $info->{last_removed_time} > $prev_time;
             $prev_time = $info->{last_removed_time};

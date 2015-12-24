@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection qw(
     $NAMESPACE
 
@@ -115,6 +118,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 my $prev_max_datasize = $coll->max_datasize;
 my $max_datasize = 100;
@@ -127,6 +131,7 @@ note '$@: ', $@;
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
 is $coll->last_errorcode, $E_DATA_TOO_LARGE, "E_DATA_TOO_LARGE";
@@ -134,6 +139,7 @@ note '$@: ', $@;
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->max_datasize( $prev_max_datasize );
 is $coll->max_datasize, $prev_max_datasize, $msg;
@@ -143,12 +149,14 @@ ok !$@, $msg;
 $info = $coll->collection_info;
 is $info->{lists},  11,                         "OK lists - $info->{lists}";
 is $info->{items},  ++$len,                     "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 eval { $id = $coll->update( '1', 0, '*' x ( $max_datasize + 1 ) ) };
 ok !$@, $msg;
 $info = $coll->collection_info;
 is $info->{lists},  11,                     "OK lists - $info->{lists}";
 is $info->{items},  $len,                   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 

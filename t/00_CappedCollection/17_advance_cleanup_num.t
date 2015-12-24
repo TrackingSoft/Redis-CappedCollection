@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
@@ -122,16 +125,20 @@ $tmp = $data_id;
 $coll->insert( $name, $data_id++, '*' );
 $info = $coll->collection_info;
 is $info->{items}, 11, "correct value";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->insert( $name, $data_id++, '*' x 10_000 );
 $info = $coll->collection_info;
 is $info->{items}, 12, "correct value";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->update( $name, $tmp, '*' x 10_000 );
 $info = $coll->collection_info;
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->insert( $name, $data_id++, '*' x 10_000 );
 $info = $coll->collection_info;
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->resize( advance_cleanup_num => 6 );
 

@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection qw(
     $DEFAULT_PORT
     $NAMESPACE
@@ -118,6 +121,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 #-- E_NO_ERROR
 
@@ -147,6 +151,7 @@ $coll->max_datasize( $prev_max_datasize );
 $coll->quit;
 
 eval { $info = $coll->collection_info };
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 is $coll->last_errorcode, $E_NETWORK, "E_NETWORK";
 note '$@: ', $@;
 ok !$coll->_redis->ping, "server is not available";

@@ -126,7 +126,7 @@ foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 
 foreach my $arg ( ( \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll->receive( 1, $arg ) } "expecting to die: ".( $arg || '' );
+    dies_ok { $coll->receive( "Some id", $arg ) } "expecting to die: ".( $arg || '' );
 }
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );

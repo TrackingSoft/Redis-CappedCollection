@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     $DATA_VERSION
@@ -84,6 +87,7 @@ is $info->{items},              0,      "OK items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} == 0, 'last_removed_time OK';
 
 $info = Redis::CappedCollection->collection_info( redis => $coll->_redis, name => $coll->name );
 is $info->{lists},              0,      "OK lists";
@@ -91,6 +95,7 @@ is $info->{items},              0,      "OK items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} == 0, 'last_removed_time OK';
 
 $info = $coll->collection_info;
 is $info->{lists},              0,      "OK lists";
@@ -99,7 +104,7 @@ is $info->{older_allowed},      0,      "OK older_allowed";             # defaul
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $coll->oldest_time,          undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
-is $info->{last_removed_time},  0,      'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} == 0, 'last_removed_time OK';
 
 dies_ok { Redis::CappedCollection->collection_info() } "expecting to die";
 
@@ -118,15 +123,17 @@ for ( my $i = 1; $i <= 10; ++$i )
     is $info->{older_allowed},      0,      "OK older_allowed";         # defaulf
     ok $info->{oldest_time}         > 0,    "OK oldest_time";
     is $coll->oldest_time,          $info->{oldest_time},   "OK oldest_time";
+    ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 }
 
 $coll->_call_redis( 'HDEL', $status_key, 'data_version' );
 $info = $coll->collection_info;
 is $info->{data_version}, '0', 'OK data_version';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->pop_oldest;
 $info = $coll->collection_info;
-ok $info->{last_removed_time} > 0, 'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} > 0, 'last_removed_time OK';
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
@@ -148,6 +155,7 @@ foreach my $i ( 1..10 )
     $info = $coll->collection_info;
     is $info->{lists},  $i, "OK lists";
     is $info->{items},  $i, "OK items";
+    ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 }
 
 $data_id = 0;
@@ -158,6 +166,7 @@ is scalar( @arr ), 11, "correct lists value";
 $info = $coll->collection_info;
 is $info->{lists},  11,              "OK lists";
 is $info->{items},  11,              "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
@@ -182,37 +191,42 @@ is $coll->_call_redis( "HLEN", $list_key ), 9, "correct list length";
 $info = $coll->collection_info;
 is $info->{lists},  1, "OK lists";
 is $info->{items},  9, "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $tmp = $coll->update( "bad_id", 0, '*' );
 ok !$tmp, "not updated";
 $info = $coll->collection_info;
 is $info->{lists},  1,  "OK lists";
 is $info->{items},  9,  "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $tmp = $coll->update( "id", 0, '***' );
 ok $tmp, "not updated";
 $info = $coll->collection_info;
 is $info->{lists},  1,  "OK lists";
 is $info->{items},  9,  "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $info = $coll->collection_info;
 is $info->{older_allowed},      0,      "OK older_allowed";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 ok $coll->resize( size => 20, older_allowed => 1 ), 'resized';
 $info = $coll->collection_info;
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 is $info->{older_allowed},      1,      "OK older_allowed";
 $coll->pop_oldest;
 $info = $coll->collection_info;
-ok $info->{last_removed_time} > 0, 'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} > 0, 'last_removed_time OK';
 $coll->insert( "id", $data_id++, 'Stuff', 3 );
 $info = $coll->collection_info;
-is $info->{last_removed_time}, 0, 'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} == 0, 'last_removed_time OK';
 $coll->pop_oldest;
 $info = $coll->collection_info;
-ok $info->{last_removed_time} > 0, 'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} > 0, 'last_removed_time OK';
 $coll->update( "id", 1, '***', 2 );
 $info = $coll->collection_info;
-is $info->{last_removed_time}, 0, 'OK last_removed_time';
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} == 0, 'last_removed_time OK';
 
 dies_ok { $coll->resize() } "expecting to die";
 ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );

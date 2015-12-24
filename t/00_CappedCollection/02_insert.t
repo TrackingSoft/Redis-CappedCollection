@@ -36,10 +36,12 @@ use Params::Util    qw( _NONNEGINT );
 use Redis::CappedCollection qw(
     $E_NETWORK
     $E_NO_ERROR
+    $E_REDIS_DID_NOT_RETURN_DATA
     $NAMESPACE
     );
 
 use Redis::CappedCollection::Test::Utils qw(
+    clear_coll_data
     verify_redis
 );
 
@@ -201,8 +203,8 @@ foreach my $i ( 1..10 )
     is scalar( @arr ), $i, "correct lists value: $i inserts ".scalar( @arr )." lists";
 }
 $list_key = $NAMESPACE.":T:*";
-@arr = $coll->_call_redis( "KEYS", $list_key );
-is scalar( @arr ), 0, "correct lists value";
+eval { $coll->_call_redis( "KEYS", $list_key ); };
+is $coll->last_errorcode, $E_REDIS_DID_NOT_RETURN_DATA, "correct lists value";
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 

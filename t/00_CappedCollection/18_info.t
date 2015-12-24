@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     $NAMESPACE
@@ -117,6 +120,7 @@ for my $big_data_threshold ( ( 0, 10 ) )
         push @arr, $tm;
         $id = $coll->insert( 'Some list id', $data_id++, '*', $tm );
         $info = $coll->collection_info;
+        ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
     }
     $id = $coll->insert( 'Some list id', $data_id++, '*', $tm );
 

@@ -39,6 +39,7 @@ use Redis::CappedCollection qw(
     );
 
 use Redis::CappedCollection::Test::Utils qw(
+    clear_coll_data
     get_redis
 );
 
@@ -115,13 +116,7 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-$coll->_call_redis( 'DEL',
-    $NAMESPACE.':Q:'.$coll->name,
-    $NAMESPACE.':S:'.$coll->name,
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':I:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':D:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':T:'.$coll->name.":*" ),
-    );
+clear_coll_data( $coll );
 $coll->quit;
 
 # each argument separately
@@ -162,13 +157,7 @@ $coll = Redis::CappedCollection->create(
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->name, $msg, $msg;
-$coll->_call_redis( 'DEL',
-    $NAMESPACE.':Q:'.$coll->name,
-    $NAMESPACE.':S:'.$coll->name,
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':I:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':D:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':T:'.$coll->name.":*" ),
-    );
+clear_coll_data( $coll );
 
 $coll = Redis::CappedCollection->create(
     name => $uuid->create_str,
@@ -177,13 +166,7 @@ $coll = Redis::CappedCollection->create(
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->max_datasize, 98765, $msg;
-$coll->_call_redis( 'DEL',
-    $NAMESPACE.':Q:'.$coll->name,
-    $NAMESPACE.':S:'.$coll->name,
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':I:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':D:'.$coll->name.":*" ),
-    $coll->_call_redis( 'KEYS', $NAMESPACE.':T:'.$coll->name.":*" ),
-    );
+clear_coll_data( $coll );
 
 # errors in the arguments
 $tmp = $coll.'';

@@ -1,5 +1,11 @@
 Revision history for Redis::CappedCollection module
 
+    CHANGES:
+    - $E_REDIS_DID_NOT_RETURN_DATA, $E_UNKNOWN_ERROR errors added.
+    - Updated version of the data structure.
+    FIXES:
+    - Incorrect analysis an error related to not enough memory.
+
 1.02  Thu Sep  03 2015
     CHANGES:
     - Redis::CappedCollection does not close connection to redis server (including '->quit' method)

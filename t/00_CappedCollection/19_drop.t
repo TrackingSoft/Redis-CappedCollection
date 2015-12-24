@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection ();
 
 use Redis::CappedCollection::Test::Utils qw(
@@ -80,6 +83,7 @@ for my $big_data_threshold ( ( 0, 20 ) )
         ( $coll->insert( $i, $data_id++, $_ ), $tmp += bytes::length( $_.'' ), ++$len ) for 1..10;
     }
     $info = $coll->collection_info;
+    ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
     is $info->{lists},  10,     "OK lists";
     is $info->{items},  $len,   "OK items";
 
@@ -89,6 +93,7 @@ for my $big_data_threshold ( ( 0, 20 ) )
         $info = $coll->collection_info;
         is $info->{lists},  10 - $i,    "OK lists";
         is $info->{items},  $len -= 10,  "OK items";
+        ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
     }
 
     dies_ok { $coll->drop_list() } "expecting to die - no args";

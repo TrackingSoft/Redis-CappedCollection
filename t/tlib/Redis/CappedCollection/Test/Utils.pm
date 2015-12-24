@@ -8,6 +8,7 @@ use Exporter qw(
     import
 );
 our @EXPORT_OK  = qw(
+    clear_coll_data
     get_redis
     verify_redis
 );
@@ -20,6 +21,7 @@ use Try::Tiny;
 use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
+    $NAMESPACE
 );
 
 sub get_redis
@@ -65,6 +67,16 @@ sub verify_redis
     }
 
     return $redis, $skip_msg, $port;
+}
+
+sub clear_coll_data {
+    my ( $coll ) = @_;
+
+    eval { $coll->_call_redis( 'DEL', $NAMESPACE.':Q:'.$coll->name ); };
+    eval { $coll->_call_redis( 'DEL', $NAMESPACE.':S:'.$coll->name ); };
+    eval { $coll->_call_redis( 'DEL', $coll->_call_redis( 'KEYS', $NAMESPACE.':I:'.$coll->name.":*" ) ); };
+    eval { $coll->_call_redis( 'DEL', $coll->_call_redis( 'KEYS', $NAMESPACE.':D:'.$coll->name.":*" ) ); };
+    eval { $coll->_call_redis( 'DEL', $coll->_call_redis( 'KEYS', $NAMESPACE.':T:'.$coll->name.":*" ) ); };
 }
 
 1;

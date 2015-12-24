@@ -31,7 +31,11 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection qw(
+    $E_REDIS_DID_NOT_RETURN_DATA
     $NAMESPACE
     );
 
@@ -84,15 +88,16 @@ for ( my $i = 1; $i <= 10; ++$i )
 $info = $coll->collection_info;
 is $info->{lists},  10,     "OK lists";
 is $info->{items},  $len,   "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->drop_collection;
 
 $list_key = $NAMESPACE.':[DT]:*';
-@arr = $coll->_call_redis( "KEYS", $list_key );
+eval { $coll->_call_redis( "KEYS", $list_key ); };
+is $coll->last_errorcode, $E_REDIS_DID_NOT_RETURN_DATA, "correct lists value";
 
 ok !$coll->_call_redis( "EXISTS", $status_key ),    "status hash droped";
 ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
-ok !@arr,                                           "data lists droped";
 
 is $coll->name, undef, "correct collection name";
 
@@ -106,19 +111,24 @@ $coll->insert( 'list_id', $data_id++, 'Stuff' ) for 1..10;
 $info = $coll->collection_info;
 ok $info->{lists}, "OK lists";
 ok $info->{items}, "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->clear_collection;
 $info = $coll->collection_info;
 ok !$info->{lists}, "OK lists";
 ok !$info->{items}, "OK items";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $list_key = $NAMESPACE.':[DT]:*';
-@arr = $coll->_call_redis( "KEYS", $list_key );
+eval { $coll->_call_redis( "KEYS", $list_key ); };
+is $coll->last_errorcode, $E_REDIS_DID_NOT_RETURN_DATA, "correct lists value";
 
 ok $coll->_call_redis( "EXISTS", $status_key ),    "status hash exists";
 ok !$coll->_call_redis( "EXISTS", $queue_key ),     "queue list droped";
-ok !@arr,                                           "data lists droped";
 
 ok defined( $coll->name ), "correct collection name";
+
+$id = $coll->insert( "Some id", ++$data_id, "Some stuff" );
+is $id, "Some id", "correct result";
 
 }

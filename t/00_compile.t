@@ -23,7 +23,6 @@ BEGIN { use_ok 'Redis::CappedCollection', qw(
     $MAX_MEMORY_RESERVE
 
     $E_NO_ERROR
-    $E_INCOMP_DATA_VERSION
     $E_MISMATCH_ARG
     $E_DATA_TOO_LARGE
     $E_NETWORK
@@ -34,6 +33,9 @@ BEGIN { use_ok 'Redis::CappedCollection', qw(
     $E_DATA_ID_EXISTS
     $E_OLDER_THAN_ALLOWED
     $E_NONEXISTENT_DATA_ID
+    $E_INCOMP_DATA_VERSION
+    $E_REDIS_DID_NOT_RETURN_DATA
+    $E_UNKNOWN_ERROR
     ) }
 
 my $val;

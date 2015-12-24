@@ -31,6 +31,9 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
+use Params::Util qw(
+    _NUMBER
+);
 use Redis::CappedCollection qw(
     $NAMESPACE
     );
@@ -82,6 +85,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 $info = $coll_1->collection_info;
 is $info->{lists},  10,     "OK lists - $info->{lists}";
 is $info->{items},  $len,   "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 #-- all correct
 
@@ -117,6 +121,7 @@ is $coll_2->name, "Some new name", "correct collection name";
 $info = $coll_2->collection_info;
 is $info->{lists},  0, "OK lists - $info->{lists}";
 is $info->{items},  0, "OK queue length - $info->{items}";
+ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 #-- ping
 
