@@ -1,5 +1,6 @@
 Revision history for Redis::CappedCollection module
 
+1.03  Thu Jan  07 2016
     CHANGES:
     - Works with a Redis server 'maxmemory-policy' setting 'noeviction' only.
     - Added 'redis_config_ok' method.
