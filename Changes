@@ -1,6 +1,8 @@
 Revision history for Redis::CappedCollection module
 
     CHANGES:
+    - Works with a Redis server 'maxmemory-policy' setting 'noeviction' only.
+    - Added 'redis_config_ok' method.
     - $E_REDIS_DID_NOT_RETURN_DATA, $E_UNKNOWN_ERROR errors added.
     - Updated version of the data structure.
     FIXES:

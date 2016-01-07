@@ -51,7 +51,13 @@ my $error;
 my $redis_error = "Unable to create test Redis server";
 my $port = Net::EmptyPort::empty_port( $DEFAULT_PORT );
 
-my $redis_server = get_redis( conf => { port => $port }, _redis => 1 );
+my $redis_server = get_redis(
+    conf    => {
+        port                => $port,
+        'maxmemory-policy'  => 'noeviction',
+    },
+    _redis  => 1,
+);
 $skip_msg = $redis_error unless $redis_server;
 my $redis_addr = $DEFAULT_SERVER.":$port";
 eval { $redis = Redis->new( server => $redis_addr ) };

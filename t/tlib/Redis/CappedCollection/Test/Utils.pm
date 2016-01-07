@@ -53,7 +53,13 @@ sub verify_redis
     my $skip_msg;
     my $port = Net::EmptyPort::empty_port( $DEFAULT_PORT );
 
-    $redis = get_redis( conf => { port => $port }, timeout => 3 );
+    $redis = get_redis(
+        conf    => {
+            port                => $port,
+            'maxmemory-policy'  => 'noeviction',
+        },
+        timeout => 3,
+    );
     if ( $redis )
     {
         eval { $real_redis = Redis->new( server => $DEFAULT_SERVER.":".$port ) };

@@ -279,16 +279,16 @@ const our $E_MAXMEMORY_LIMIT    => 4;
 
 =item C<$E_MAXMEMORY_POLICY>
 
-5 - Data may have been removed be by C<maxmemory-policy all*>.
+5 - Redis server have incompatible C<maxmemory-policy> setting.
 
-Thrown when collection is damaged by data removal using C<maxmemory-policy all*> in F<redis.conf>.
+Thrown when Redis server have incompatible C<maxmemory-policy> setting in F<redis.conf>.
 
 =cut
 const our $E_MAXMEMORY_POLICY   => 5;
 
 =item C<$E_COLLECTION_DELETED>
 
-6 - Collection was removed prior to use.
+6 - Collection elements was removed prior to use.
 
 This means that the system part of the collection was removed prior to use.
 
@@ -367,8 +367,8 @@ our %ERROR = (
     $E_DATA_TOO_LARGE       => 'Data is too large',
     $E_NETWORK              => 'Error in connection to Redis server',
     $E_MAXMEMORY_LIMIT      => "Command not allowed when used memory > 'maxmemory'",
-    $E_MAXMEMORY_POLICY     => 'Data removed may be by maxmemory-policy all*',
-    $E_COLLECTION_DELETED   => 'Collection was removed prior to use',
+    $E_MAXMEMORY_POLICY     => 'Redis server have incompatible maxmemory-policy setting',
+    $E_COLLECTION_DELETED   => 'Collection elements was removed prior to use',
     $E_REDIS                => 'Redis error message',
     $E_DATA_ID_EXISTS       => 'Attempt to add data to an existing ID',
     $E_OLDER_THAN_ALLOWED   => 'Attempt to add data over outdated',
@@ -383,6 +383,7 @@ const our $REDIS_MEMORY_ERROR_CODE  => 'OOM';
 const our $REDIS_MEMORY_ERROR_MSG   => "$REDIS_MEMORY_ERROR_CODE $ERROR{ $E_MAXMEMORY_LIMIT }.";
 const our $MAX_DATASIZE             => 512*1024*1024;   # A String value can be at max 512 Megabytes in length.
 const my $MAX_REMOVE_RETRIES        => 2;       # the number of remove retries when memory limit is near
+const my $USED_MEMORY_POLICY        => 'noeviction';
 
 my $_lua_namespace  = "local NAMESPACE  = '".$NAMESPACE."'";
 my $_lua_queue_key  = "local QUEUE_KEY  = NAMESPACE..':Q:'..coll_name";
@@ -1072,7 +1073,7 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return { $E_MAXMEMORY_POLICY, nil, nil, nil }
+    return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 
 -- Features the oldest data
@@ -1422,9 +1423,7 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # available memory from Redis.
                         # In some cases Redis implementation forbids such request,
                         # but setting 'check_maxmemory' to false can be used
-                        # as a workaround. In this case we assume that
-                        # 'maxmemory-policy' is 'volatile-lru'
-                        # (default value in 'redis.conf').
+                        # as a workaround.
         memory_reserve  => 0,05,    # Reserve coefficient of 'maxmemory'.
                         # Not used when C<'maxmemory'> == 0 (it is not set in the F<redis.conf>).
                         # When you add or modify the data trying to ensure
@@ -1496,17 +1495,8 @@ sub BUILD {
         confess "Need a Redis server version 2.8 or higher";
     }
 
-    if ( $self->_check_maxmemory ) {
-        $self->_maxmemory_policy( ( $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' ) )[1] );
-        if ( !$self->_create_from_open && $self->_maxmemory_policy =~ /^all/ ) {
-            $self->_throw( $E_MAXMEMORY_POLICY );
-        }
-    } else {
-        # redis.conf :
-        #   The default is:
-        #   maxmemory-policy volatile-lru
-        $self->_maxmemory_policy( 'volatile-lru' );
-    }
+    $self->_throw( $E_MAXMEMORY_POLICY )
+        unless $self->_maxmemory_policy_ok;
 
     $self->_maxmemory( $maxmemory );
     $self->max_datasize( min $self->_maxmemory, $self->max_datasize )
@@ -2069,7 +2059,7 @@ sub pop_oldest {
 
     my ( $error, $queue_exist, $excess_id, $excess_data ) = @ret;
     if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED || $error == $E_MAXMEMORY_POLICY;
+        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
@@ -2081,6 +2071,37 @@ sub pop_oldest {
     } else {
         return;
     }
+}
+
+=head3 C<redis_config_ok( redis =E<gt> $server )>
+
+    say 'Redis server config ', $coll->redis_config_ok ? 'OK' : 'NOT OK';
+    my $redis = Redis->new( server => "$server:$port" );
+    say 'Redis server config ',
+        Redis::CappedCollection::redis_config_ok( redis => $redis )
+            ? 'OK'
+            : 'NOT OK'
+    ;
+
+Check whether there is a Redis server config correct,
+now that the 'maxmemory-policy' setting is 'noeviction'.
+Returns true if config correct and false otherwise.
+
+It can be called as either the existing C<Redis::CappedCollection> object method or a class function.
+
+If invoked as the object method, C<redis_config_ok> uses the C<redis>
+attribute from the object as default.
+
+If invoked as the class function, C<redis_config_ok> requires mandatory C<redis>
+argument.
+
+This argument are in key-value pair as described for L</create> method.
+
+An error exception is thrown (C<confess>) if an argument is not valid.
+
+=cut
+sub redis_config_ok {
+    return _maxmemory_policy_ok( @_ );
 }
 
 =head3 C<collection_info( redis =E<gt> $server, name =E<gt> $name )>
@@ -2832,7 +2853,6 @@ has _maxmemory              => (
 );
 
 foreach my $attr_name ( qw(
-        _maxmemory_policy
         _queue_key
         _status_key
         _data_keys
@@ -2848,6 +2868,28 @@ foreach my $attr_name ( qw(
 my $_lua_scripts = {};
 
 #-- private functions ----------------------------------------------------------
+
+sub _maxmemory_policy_ok {
+    my ( $self, $redis );
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        $self   = shift;
+        $redis  = $self->_redis;
+    } else {
+        shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
+    }
+    my %arguments = @_;
+
+    my $maxmemory_policy;
+    if ( $self ) {
+        ( undef, $maxmemory_policy ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' );
+    } else {
+        my $redis_argument = $arguments{redis};
+        confess "'redis' argument is required" unless defined( $redis_argument );
+        ( undef, $maxmemory_policy ) = _call_redis( _get_redis( $redis_argument ), 'CONFIG', 'GET', 'maxmemory-policy' )
+    }
+
+    return( defined( $maxmemory_policy ) && $maxmemory_policy eq $USED_MEMORY_POLICY );
+}
 
 sub _lists2hash {
     my ( $keys, $vals ) = @_;
@@ -3106,7 +3148,8 @@ Unidentified errors also throw exceptions but L</last_errorcode> is not set.
 
 In addition to errors in the L<Redis|Redis> module, detected errors are
 L</$E_MISMATCH_ARG>, L</$E_DATA_TOO_LARGE>, L</$E_MAXMEMORY_POLICY>, L</$E_COLLECTION_DELETED>,
-L</$E_DATA_ID_EXISTS>, L</$E_OLDER_THAN_ALLOWED>, L</$E_NONEXISTENT_DATA_ID>.
+L</$E_DATA_ID_EXISTS>, L</$E_OLDER_THAN_ALLOWED>, L</$E_NONEXISTENT_DATA_ID>,
+L</$E_INCOMP_DATA_VERSION>, L</$E_REDIS_DID_NOT_RETURN_DATA>, L</$E_UNKNOWN_ERROR>.
 
 The user has the choice:
 
@@ -3169,8 +3212,7 @@ An example of error handling.
             # For example, return code to restart the server
             #return 'to restart the redis server';
         } elsif ( $coll->last_errorcode == $E_MAXMEMORY_POLICY ) {
-            # For example, return code to reinsert the data
-            #return "to reinsert look at $err";
+            # Correct Redis server 'maxmemory-policy' setting
         } elsif ( $coll->last_errorcode == $E_COLLECTION_DELETED ) {
             # For example, return code to ignore
             #return "to ignore $err";

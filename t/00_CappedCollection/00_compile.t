@@ -26,6 +26,7 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     list_info
     oldest_time
     pop_oldest
+    redis_config_ok
     list_exists
     lists
     drop_collection

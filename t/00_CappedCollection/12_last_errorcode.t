@@ -70,6 +70,20 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $m
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
+sub check_redis_config {
+    if ( $policy eq 'noeviction' ) {
+        ok Redis::CappedCollection::_maxmemory_policy_ok( redis => $coll->_redis ), 'check maxmemory-policy correct';
+        ok $coll->_maxmemory_policy_ok, 'check maxmemory-policy correct';
+        ok Redis::CappedCollection::redis_config_ok( redis => $coll->_redis ), 'redis config correct';
+        ok $coll->redis_config_ok, 'redis config correct';
+    } else {
+        ok !Redis::CappedCollection::_maxmemory_policy_ok( redis => $coll->_redis ), 'check maxmemory-policy correct';
+        ok !$coll->_maxmemory_policy_ok, 'check maxmemory-policy correct';
+        ok !Redis::CappedCollection::redis_config_ok( redis => $coll->_redis ), 'redis config not correct';
+        ok !$coll->redis_config_ok, 'redis config not correct';
+    }
+}
+
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
@@ -94,6 +108,7 @@ sub new_connect {
 
     ok $coll->_server =~ /.+:$port$/, $msg;
     ok ref( $coll->_redis ) =~ /Redis/, $msg;
+    check_redis_config();
 
     $status_key  = $NAMESPACE.':S:'.$coll->name;
     $queue_key   = $NAMESPACE.':Q:'.$coll->name;
@@ -181,14 +196,17 @@ new_connect();
 
 #-- E_MAXMEMORY_POLICY
 
-#    $policy = "volatile-lru";       # -> remove the key with an expire set using an LRU algorithm
-#    $policy = "allkeys-lru";        # -> remove any key accordingly to the LRU algorithm
-#    $policy = "volatile-random";    # -> remove a random key with an expire set
-    $policy = "allkeys-random";     # -> remove a random key, any key
-#    $policy = "volatile-ttl";       # -> remove the key with the nearest expire time (minor TTL)
-#    $policy = "noeviction";         # -> don't expire at all, just return an error on write operations
-
-    dies_ok { new_connect() } "expecting to die: E_MAXMEMORY_POLICY";
+    foreach my $test_policy (
+            'volatile-lru',         # -> remove the key with an expire set using an LRU algorithm
+            'allkeys-lru',          # -> remove any key accordingly to the LRU algorithm
+            'volatile-random',      # -> remove a random key with an expire set
+            'allkeys-random',       # -> remove a random key, any key
+            'volatile-ttl',         # -> remove the key with the nearest expire time (minor TTL)
+#            'noeviction',           # -> don't expire at all, just return an error on write operations
+        ) {
+        $policy = $test_policy;
+        dies_ok { new_connect() } "expecting to die: E_MAXMEMORY_POLICY";
+    }
 
 #-- E_COLLECTION_DELETED
 

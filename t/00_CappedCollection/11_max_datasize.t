@@ -95,10 +95,10 @@ sub new_connect {
 
 $maxmemory_mode = 0;
 new_connect();
-is $coll->_maxmemory_policy, 'volatile-lru', 'check_maxmemory correct';
+ok $coll->_maxmemory_policy_ok, 'check maxmemory-policy correct';
 $maxmemory_mode = 1;
 new_connect();
-is $coll->_maxmemory_policy, 'noeviction', 'check_maxmemory correct';
+ok $coll->_maxmemory_policy_ok, 'check maxmemory-policy correct';
 
 undef $maxmemory_mode;
 new_connect();

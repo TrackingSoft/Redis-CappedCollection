@@ -16,6 +16,7 @@ use Redis::CappedCollection qw(
     $E_DATA_TOO_LARGE
     $E_NETWORK
     $E_MAXMEMORY_LIMIT
+    $E_MAXMEMORY_POLICY
     $E_COLLECTION_DELETED
     $E_REDIS
     $E_DATA_ID_EXISTS
@@ -53,6 +54,10 @@ sub exception {
     {
         # For example, return code to restart the server
         #return 'to restart the redis server';
+    }
+    elsif ( $coll->last_errorcode == $E_MAXMEMORY_POLICY )
+    {
+        # Correct Redis server 'maxmemory-policy' setting
     }
     elsif ( $coll->last_errorcode == $E_COLLECTION_DELETED )
     {
