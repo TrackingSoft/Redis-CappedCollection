@@ -999,6 +999,34 @@ end
 return $E_NO_ERROR
 END_UPDATE
 
+$lua_script_body{upsert} = <<"END_UPSERT";
+-- update or insert the data in the list of collections
+
+local coll_name             = ARGV[1]
+local list_id               = ARGV[2]
+local data_id               = ARGV[3]
+local data_time             = tonumber( ARGV[5] )
+local start_time            = ARGV[7]
+
+-- key data storage structures
+$_lua_namespace
+$_lua_data_keys
+$_lua_data_key
+
+-- verification of the existence of old data with new data identifier
+if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
+    if data_time == -1 then
+        ARGV[5] = '0'
+    end
+    $lua_script_body{update}
+else
+    if data_time == -1 then
+        ARGV[5] = start_time
+    end
+    $lua_script_body{insert}
+end
+END_UPSERT
+
 $lua_script_body{receive} = <<"END_RECEIVE";
 -- returns the data from the list
 
@@ -1899,10 +1927,10 @@ sub update {
     my $data_id = shift;
     my $data    = shift;
 
-    _STRING( $list_id )                             // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
-    defined( _STRING( $data_id ) )                  || $self->_throw( $E_MISMATCH_ARG, 'data_id' );
     $data                                           // $self->_throw( $E_MISMATCH_ARG, 'data' );
     ( defined( _STRING( $data ) ) || $data eq '' )  || $self->_throw( $E_MISMATCH_ARG, 'data' );
+    _STRING( $list_id )                             // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    defined( _STRING( $data_id ) )                  || $self->_throw( $E_MISMATCH_ARG, 'data_id' );
 
     my $new_data_time;
     if ( @_ ) {
@@ -1941,6 +1969,64 @@ sub update {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
         _extended_confess( @ret );
     }
+}
+
+=head3 C<upsert( $list_id, $data_id, $data, $data_time )>
+
+    $list_id = $coll->upsert( 'Some List_id', 'Some Data_id', 'Some data' );
+
+    $list_id = $coll->upsert( 'Another List_id', 'Data ID', 'More data', Time::HiRes::time() );
+
+If the list C<$list_id> does not contain data with C<$data_id>,
+then it behaves like an L</insert>,
+otherwise behaves like an L</update>.
+
+The method returns the ID of the data list to which the data was inserted (value of
+the C<$list_id> argument) as the L</insert> method.
+
+=cut
+sub upsert {
+    my $self        = shift;
+    my $list_id     = shift;
+    my $data_id     = shift;
+    my $data        = shift;
+    my $data_time   = shift;
+
+    $data                                                   // $self->_throw( $E_MISMATCH_ARG, 'data' );
+    ( defined( _STRING( $data ) ) || $data eq '' )          || $self->_throw( $E_MISMATCH_ARG, 'data' );
+    _STRING( $list_id )                                     // $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    $list_id !~ /:/                                         || $self->_throw( $E_MISMATCH_ARG, 'list_id' );
+    defined( _STRING( $data_id ) )                          || $self->_throw( $E_MISMATCH_ARG, 'data_id' );
+    !defined( $data_time ) || ( defined( _NUMBER( $data_time ) ) && $data_time > 0 ) || $self->_throw( $E_MISMATCH_ARG, 'data_time' );
+
+    my $data_len = bytes::length( $data );
+    ( $data_len <= $self->max_datasize )                    || $self->_throw( $E_DATA_TOO_LARGE );
+
+    $self->_set_last_errorcode( $E_NO_ERROR );
+
+    my @ret = $self->_call_redis(
+        $self->_lua_script_cmd( 'upsert' ),
+        0,
+        $self->name,
+        $list_id,
+        $data_id,
+        $data,
+        $data_time // -1,
+        # Recommend the inclusion of this option in the case of incomprehensible errors
+        $self->_DEBUG,
+        time,
+    );
+
+    my ( $error ) = @ret;
+    if ( exists $ERROR{ $error } ) {
+        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+        $self->_throw( $error ) if $error != $E_NO_ERROR;
+    } else {
+        $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
+        _extended_confess( @ret );
+    }
+
+    return $list_id;    # as insert
 }
 
 =head3 C<receive( $list_id, $data_id )>

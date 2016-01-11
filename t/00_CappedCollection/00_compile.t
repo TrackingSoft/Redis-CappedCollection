@@ -21,6 +21,7 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     create
     insert
     update
+    upsert
     receive
     collection_info
     list_info

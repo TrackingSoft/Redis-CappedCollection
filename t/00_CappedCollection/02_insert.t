@@ -56,6 +56,13 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
+sub testing {
+    my ( $method ) = @_;
+
+    undef $redis;
+    ( $redis, $skip_msg, $port ) = verify_redis();
+    isa_ok( $redis, 'Test::RedisServer' );
+
 my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
@@ -76,7 +83,7 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 my $data_id = -1;
 
 # all correct
-$id = $coll->insert( "Some id", ++$data_id, "Some stuff" );
+$id = $coll->$method( "Some id", ++$data_id, "Some stuff" );
 is $id, "Some id", "correct result";
 ok $coll->_call_redis( "EXISTS", $queue_key ), "queue list created";
 $list_key = $NAMESPACE.":D:".$coll->name.':'.$id;
@@ -85,23 +92,23 @@ $list_key = $NAMESPACE.":T:".$coll->name.':'.$id;
 ok !$coll->_call_redis( "EXISTS", $list_key ), "data list created";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 1, "correct status value";
 
-$tmp = $coll->insert( "Some id", ++$data_id, "Some new stuff" );
+$tmp = $coll->$method( "Some id", ++$data_id, "Some new stuff" );
 is $tmp, $id, "correct result";
 $list_key = $NAMESPACE.":T:".$coll->name.':'.$id;
 ok $coll->_call_redis( "EXISTS", $list_key ), "data list created";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 1, "correct status value";
 
-$tmp = $coll->insert( "Some new id", ++$data_id, "Some another stuff" );
+$tmp = $coll->$method( "Some new id", ++$data_id, "Some another stuff" );
 is $tmp, "Some new id", "correct result";
 is $coll->_call_redis( "HGET", $status_key, 'lists'  ), 2, "correct status value";
 
-#$id = $coll->insert( undef, ++$data_id, "Any stuff" );
+#$id = $coll->$method( undef, ++$data_id, "Any stuff" );
 #is bytes::length( $id ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
 
 my $saved_name = $coll->name;
-$coll->insert( "ID", ++$data_id, "Stuff" );
-$coll->insert( "ID", ++$data_id, "Stuff" );
-$coll->insert( "ID", ++$data_id, "Stuff" );
+$coll->$method( "ID", ++$data_id, "Stuff" );
+$coll->$method( "ID", ++$data_id, "Stuff" );
+$coll->$method( "ID", ++$data_id, "Stuff" );
 
 # errors in the arguments
 $coll = Redis::CappedCollection->create(
@@ -112,11 +119,11 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 
-dies_ok { $coll->insert() } "expecting to die - no args";
+dies_ok { $coll->$method() } "expecting to die - no args";
 
 foreach my $arg ( ( undef, \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll->insert(
+    dies_ok { $coll->$method(
         undef,
         ++$data_id,
         $arg,
@@ -125,7 +132,7 @@ foreach my $arg ( ( undef, \"scalar", [], $uuid ) )
 
 foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll->insert(
+    dies_ok { $coll->$method(
         $arg,
         ++$data_id,
         "Correct stuff",
@@ -134,7 +141,7 @@ foreach my $arg ( ( undef, "", "Some:id", \"scalar", [], $uuid ) )
 
 foreach my $arg ( ( undef, '', \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll->insert(
+    dies_ok { $coll->$method(
         "List id",
         $arg,
         "Correct stuff",
@@ -144,7 +151,7 @@ foreach my $arg ( ( undef, '', \"scalar", [], $uuid ) )
 $tmp = 0;
 foreach my $arg ( ( 0, -1, -3, "", "0", \"scalar", [], $uuid ) )
 {
-    dies_ok { $coll->insert(
+    dies_ok { $coll->$method(
         "List id",
         $tmp++,
         "Correct stuff",
@@ -181,7 +188,7 @@ is $tmp, "@arr", "correct values set";
 # destruction of status hash
 $status_key  = $NAMESPACE.':S:'.$coll->name;
 $coll->_call_redis( "DEL", $status_key );
-dies_ok { $id = $coll->insert( "Some id", ++$data_id, "Some stuff" ) } "expecting to die";
+dies_ok { $id = $coll->$method( "Some id", ++$data_id, "Some stuff" ) } "expecting to die";
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
@@ -198,7 +205,7 @@ $status_key  = $NAMESPACE.':S:'.$coll->name;
 $list_key = $NAMESPACE.':D:*';
 foreach my $i ( 1..10 )
 {
-    $id = $coll->insert( $i, ++$data_id, $i );
+    $id = $coll->$method( $i, ++$data_id, $i );
     @arr = $coll->_call_redis( "KEYS", $list_key );
     is scalar( @arr ), $i, "correct lists value: $i inserts ".scalar( @arr )." lists";
 }
@@ -221,8 +228,8 @@ $status_key  = $NAMESPACE.':S:'.$coll->name;
 $list_key = $NAMESPACE.':D:*';
 foreach my $i ( 1..10 )
 {
-    $id = $coll->insert( $i, ++$data_id, $i, gettimeofday + 0 );
-    $id = $coll->insert( $i, ++$data_id, $i, gettimeofday + 0 );
+    $id = $coll->$method( $i, ++$data_id, $i, gettimeofday + 0 );
+    $id = $coll->$method( $i, ++$data_id, $i, gettimeofday + 0 );
     @arr = $coll->_call_redis( "KEYS", $list_key );
     is scalar( @arr ), $i, "correct lists value: $i inserts ".scalar( @arr )." lists";
 }
@@ -232,7 +239,7 @@ $list_key = $NAMESPACE.":T:*";
 @arr = $coll->_call_redis( "KEYS", $list_key );
 is scalar( @arr ), 10, "correct lists value";
 
-$id = $coll->insert( 'List id', ++$data_id, '*' x 5, gettimeofday + 0 );
+$id = $coll->$method( 'List id', ++$data_id, '*' x 5, gettimeofday + 0 );
 @arr = $coll->_call_redis( "KEYS", $list_key );
 is scalar( @arr ), 10, "correct lists value";
 
@@ -259,7 +266,7 @@ $list_key = $NAMESPACE.":D:*";
 my $lists = 0;
 my $i = 1;
 while ( 1 ) {
-    $coll->insert( $i, $i, '@' x 10_000, gettimeofday );
+    $coll->$method( $i, $i, '@' x 10_000, gettimeofday );
     @arr = $coll->_call_redis( "KEYS", $list_key );
     $lists = scalar( @arr );
     last if $lists != $i;
@@ -269,7 +276,7 @@ is $lists, $i - 1, 'data squeezed';
 
 $coll->quit;
 lives_ok {
-    $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
+    $coll->$method( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
 } "expecting to live: ";
 is $coll->last_errorcode, $E_NO_ERROR, 'E_NO_ERROR';
 
@@ -282,8 +289,14 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 $coll->quit;
 
 dies_ok {
-    $coll->insert( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
+    $coll->$method( 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
 } "expecting to die: ";
 is $coll->last_errorcode, $E_NETWORK, 'E_NETWORK';
+}
+
+foreach my $method ( qw( insert upsert ) )
+{
+    testing( $method );
+}
 
 }
