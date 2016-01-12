@@ -51,11 +51,11 @@
    "provides" : {
       "Redis::CappedCollection" : {
          "file" : "lib/Redis/CappedCollection.pm",
-         "version" : "1.03"
+         "version" : "1.04"
       }
    },
    "release_status" : "stable",
-   "version" : "1.03",
+   "version" : "1.04",
    "resources" : {
       "repository" : {
          "type" : "git",

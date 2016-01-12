@@ -1,5 +1,6 @@
 Revision history for Redis::CappedCollection module
 
+1.04  Tue Jan  12 2016
     CHANGES:
     - Added 'upsert' method.
 
