@@ -61,6 +61,7 @@ sub testing {
 
     undef $redis;
     ( $redis, $skip_msg, $port ) = verify_redis();
+    return unless $redis;   # it was not possible to re-start the redis server
     isa_ok( $redis, 'Test::RedisServer' );
 
 my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );

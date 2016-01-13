@@ -55,6 +55,7 @@ sub testing {
 
     undef $redis;
     ( $redis, $skip_msg, $port ) = verify_redis();
+    return unless $redis;   # it was not possible to re-start the redis server
     isa_ok( $redis, 'Test::RedisServer' );
 
 my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
@@ -282,6 +283,15 @@ if ( $method eq 'upsert' ) {
     my $new_data = $coll->receive( $list_id, 4 );
     ok $new_data eq $data, 'data changed';
 
+    $coll->$method( $list_id, 4, 'new data' );  # update without $data_time
+    @arr = $coll->_call_redis( 'ZRANGE', $time_key, 0, -1, 'WITHSCORES' );
+    is "@arr", '4 2 3 3 5 5', 'T OK (data_time not changed on update)';
+    $new_data = $coll->receive( $list_id, 4 );
+    ok $new_data eq 'new data', 'data changed';
+
+    $coll->pop_oldest;
+    # last_removed_time != 0
+    sleep 1;
     $coll->$method( $list_id, 4, 'new data' );  # update without $data_time
     @arr = $coll->_call_redis( 'ZRANGE', $time_key, 0, -1, 'WITHSCORES' );
     is "@arr", '4 2 3 3 5 5', 'T OK (data_time not changed on update)';

@@ -960,7 +960,7 @@ end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
 if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
-    if new_data_time < last_removed_time then
+    if new_data_time ~= 0 and new_data_time < last_removed_time then
         return $E_OLDER_THAN_ALLOWED
     end
 end
