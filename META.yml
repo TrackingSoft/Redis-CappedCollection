@@ -33,7 +33,7 @@ no_index:
 provides:
   Redis::CappedCollection:
     file: lib/Redis/CappedCollection.pm
-    version: 1.04
+    version: 1.05
 requires:
   Const::Fast: 0.014
   Digest::SHA1: 2.13
@@ -42,7 +42,7 @@ requires:
   Redis: 1.976
   Try::Tiny: 0.18
   perl: 5.010
-version: 1.04
+version: 1.05
 resources:
   homepage: https://github.com/TrackingSoft/Redis-CappedCollection
   repository: git://github.com/TrackingSoft/Redis-CappedCollection.git
