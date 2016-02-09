@@ -1,5 +1,3 @@
-#!/usr/bin/perl -w
-
 use 5.010;
 use strict;
 use warnings;
@@ -15,7 +13,7 @@ my %config = (
     PREREQ_PM                   => {
         'Const::Fast'           => '0.014',
         'Digest::SHA1'          => '2.13',
-        'Mouse'                 => '2.4.1',
+        'Mouse'                 => 0,
         'Params::Util'          => '1.07',
         'Redis'                 => '1.976',
         'Try::Tiny'             => '0.18',
