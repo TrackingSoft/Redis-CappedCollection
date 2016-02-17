@@ -328,7 +328,7 @@ foreach my $method ( qw( insert upsert ) )
 
 foreach my $method ( sort keys %statistics ) {
     my $method_info = $statistics{ $method };
-    foreach my $property ( sort keys $method_info ) {
+    foreach my $property ( sort keys %$method_info ) {
         my $property_info = $method_info->{ $property };
         diag "$method:$property average = ", $property_info->{sum} / $property_info->{count};
     }
