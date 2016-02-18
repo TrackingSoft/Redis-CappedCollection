@@ -505,21 +505,50 @@ local cleaning_error = function ( error_msg )
     error( error_msg, 2 )
 end
 
+local table_val_to_str = function ( v )
+    if "string" == type( v ) then
+        v = string.gsub( v, "\\n", "\\\\n" )
+        if string.match( string.gsub( v, "[^'\\"]", "" ), '^"+\$' ) then
+            return "'" .. v .. "'"
+        end
+        return '"' .. string.gsub( v, '"', '\\\\"' ) .. '"'
+    else
+        return "table" == type( v ) and table_tostring( v ) or tostring( v )
+    end
+end
+
+local table_key_to_str = function ( k )
+    if "string" == type( k ) and string.match( k, "^[_%a][_%a%d]*\$" ) then
+        return k
+    else
+        return "[" .. table_val_to_str( k ) .. "]"
+    end
+end
+
+local table_tostring = function ( tbl )
+    local result, done = {}, {}
+    for k, v in ipairs( tbl ) do
+        table.insert( result, table_val_to_str( v ) )
+        done[ k ] = true
+    end
+    for k, v in pairs( tbl ) do
+        if not done[ k ] then
+            table.insert( result, table_key_to_str( k ) .. "=" .. table_val_to_str( v ) )
+        end
+    end
+    return "{" .. table.concat( result, "," ) .. "}"
+end
+
 local call_with_error_control = function ( list_id, data_id, ... )
     local retries = $MAX_REMOVE_RETRIES
-    local ret, error_msg
+    local ret
     repeat
         ret = redis.pcall( ... )
-        if
-                type( ret ) == 'table'
-            and ret[1] == 'err'
---            and find( ret[2], '$REDIS_MEMORY_ERROR_CODE' )[1] == 1
-        then
-            error_msg = "$REDIS_MEMORY_ERROR_MSG - "..ret[2]
+        if type( ret ) == 'table' and ret.err ~= nil then
             if _DEBUG then
                 _debug_log( {
                     _STEP       = 'call_with_error_control',
-                    error_msg   = error_msg,
+                    error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")",
                     retries     = retries
                 } )
             end
@@ -1407,6 +1436,10 @@ subtype __PACKAGE__.'::DataStr',
     message { "'".( $_ || '' )."' is not a valid data string!" }
 ;
 
+#FIXME: debug only
+my $_self;
+my $_redis;
+
 #-- constructor ----------------------------------------------------------------
 
 =head2 CONSTRUCTOR
@@ -1866,12 +1899,27 @@ sub insert {
     );
 
     my ( $error ) = @ret;
-    if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
-        $self->_throw( $error ) if $error != $E_NO_ERROR;
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
+    if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
+        if ( $error == $E_NO_ERROR ) {
+            # Normal result: Nothing to do
+        } elsif ( $error == $E_COLLECTION_DELETED ) {
+            $self->_clear_sha1;
+            $self->_throw( $error );
+        } elsif (
+                   $error == $E_DATA_ID_EXISTS
+                || $error == $E_OLDER_THAN_ALLOWED
+            ) {
+            $self->_throw( $error );
+        } else {
+            $self->_throw( $error, 'Unexpected error' );
+        }
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     return $list_id;
@@ -1956,18 +2004,28 @@ sub update {
     );
 
     my ( $error ) = @ret;
-    if ( exists $ERROR{ $error } ) {
-        if ( $error == $E_NONEXISTENT_DATA_ID ) {
-            return 0;
-        } elsif ( $error == $E_NO_ERROR ) {
-            return 1;
-        }
 
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
-        $self->_throw( $error );
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
+    if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
+        if ( $error == $E_NO_ERROR ) {
+            return 1;
+        } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
+            return 0;
+        } elsif (
+                   $error == $E_COLLECTION_DELETED
+                || $error == $E_DATA_ID_EXISTS
+                || $error == $E_OLDER_THAN_ALLOWED
+            ) {
+            $self->_clear_sha1;
+            $self->_throw( $error );
+        } else {
+            $self->_throw( $error, 'Unexpected error' );
+        }
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 }
 
@@ -2018,12 +2076,29 @@ sub upsert {
     );
 
     my ( $error ) = @ret;
-    if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
-        $self->_throw( $error ) if $error != $E_NO_ERROR;
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
+    if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
+        if ( $error == $E_NO_ERROR ) {
+            # Normal result: Nothing to do
+        } elsif ( $error == $E_COLLECTION_DELETED ) {
+            $self->_clear_sha1;
+            $self->_throw( $error );
+        } elsif (
+                   $error == $E_DATA_ID_EXISTS
+                || $error == $E_OLDER_THAN_ALLOWED
+            ) {
+            $self->_throw( $error );
+        } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
+            # Nothing to do
+        } else {
+            $self->_throw( $error, 'Unexpected error' );
+        }
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     return $list_id;    # as insert
@@ -2144,12 +2219,16 @@ sub pop_oldest {
     );
 
     my ( $error, $queue_exist, $excess_id, $excess_data ) = @ret;
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     if ( $queue_exist ) {
@@ -2300,12 +2379,16 @@ sub collection_info {
         $results = _lists2hash( \@_collection_info_result_keys, \@ret );
 
         my $error = $results->{error};
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
         if ( exists $ERROR{ $error } ) {
             $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
             $self->_throw( $error ) if $error != $E_NO_ERROR;
         } else {
             $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-            _extended_confess( @ret );
+            _unknown_error( @ret );
         }
     } else {
         shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
@@ -2328,11 +2411,15 @@ sub collection_info {
         $results = _lists2hash( \@_collection_info_result_keys, \@ret );
 
         my $error = $results->{error};
+
+#FIXME: debug only
+undef $_self;
+$_redis = $redis;
         if ( exists $ERROR{ $error } ) {
-            confess "Collection '$name.' info not received (".$ERROR{ $error }.')'
+            _confess( "Collection '$name.' info not received (".$ERROR{ $error }.')' )
                 if $error != $E_NO_ERROR;
         } else {
-            _extended_confess( @ret );
+            _unknown_error( @ret );
         }
     }
 
@@ -2387,12 +2474,16 @@ sub list_info {
     my $results = _lists2hash( \@_list_info_result_keys, \@ret );
 
     my $error = $results->{error};
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     my $oldest_time = $results->{oldest_time};
@@ -2430,12 +2521,16 @@ sub oldest_time {
     my $results = _lists2hash( \@_oldest_time_result_keys, \@ret );
 
     my $error = $results->{error};
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     my $oldest_time = $results->{oldest_time};
@@ -2564,7 +2659,10 @@ sub lists {
         @keys = $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
     } catch {
         my $error = $_;
-        confess $error unless $self->last_errorcode == $E_REDIS_DID_NOT_RETURN_DATA;
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
+        _confess( $error ) unless $self->last_errorcode == $E_REDIS_DID_NOT_RETURN_DATA;
     };
 
     return map { ( $_ =~ /:([^:]+)$/ )[0] } @keys;
@@ -2667,7 +2765,10 @@ sub resize {
                 if ( $self ) {
                     $self->_throw( $E_COLLECTION_DELETED, $msg );
                 } else {
-                    confess "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')';
+#FIXME: debug only
+undef $_self;
+$_redis = $redis;
+                    _confess( "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')' );
                 }
             }
         }
@@ -2772,12 +2873,16 @@ sub drop_list {
     my $results = _lists2hash( \@_drop_list_result_keys, \@ret );
 
     my $error = $results->{error};
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _extended_confess( @ret );
+        _unknown_error( @ret );
     }
 
     return $results->{list_removed};
@@ -2991,10 +3096,23 @@ sub _lists2hash {
     return \%hash;
 }
 
-sub _extended_confess {
+sub _unknown_error {
     my @args = @_;
 
-    confess $ERROR{ $E_UNKNOWN_ERROR }, ': ', join( ', ', map { $_ // '<undef>' } @args );
+    _confess( $ERROR{ $E_UNKNOWN_ERROR }, ': ', join( ', ', map { $_ // '<undef>' } @args ) );
+}
+
+sub _confess {
+    my @args = @_;
+
+#FIXME: debug only
+use Data::Dumper;
+$Data::Dumper::Sortkeys = 1;
+my @add_messages;
+push( @add_messages, ' ', Data::Dumper->Dump( [ $_self ], [ 'self' ] ) ) if $_self;
+push( @add_messages, ' ', Data::Dumper->Dump( [ $_redis ], [ 'redis' ] ) ) if $_redis;
+
+    confess @args, @add_messages;
 }
 
 sub _make_data_key {
@@ -3064,12 +3182,15 @@ sub _verify_collection {
 sub _throw {
     my ( $self, $err, $prefix ) = @_;
 
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
-        confess( ( $prefix ? "$prefix : " : '' ).$ERROR{ $err } );
+        _confess( ( $prefix ? "$prefix : " : '' ).$ERROR{ $err } );
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        confess $ERROR{ $E_UNKNOWN_ERROR }, ': ', ( $prefix ? "$prefix : " : '' ), $err // '<undef>';
+        _confess $ERROR{ $E_UNKNOWN_ERROR }, ': ', ( $prefix ? "$prefix : " : '' ), $err // '<undef>';
     }
 }
 
@@ -3129,8 +3250,14 @@ sub _throw {
             } else {
                 $self->_set_last_errorcode( $E_REDIS );
             }
+
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
         } else {
             # nothing to do now
+#FIXME: debug only
+undef $_self;
         }
 
         if ( $error =~ /\] ERR Error (?:running|compiling) script/ ) {
@@ -3139,7 +3266,7 @@ sub _throw {
 #$Data::Dumper::Sortkeys = 1;
 #say STDERR '# DUMP: ', Data::Dumper->Dump( [ \%lua_script_body ], [ 'lua_script_body' ] );
         }
-        die $error;
+        _confess( $error );
     }
 }
 
@@ -3197,8 +3324,14 @@ sub _call_redis {
     } catch {
         my $error = $_;
         if ( $self ) {
+#FIXME: debug only
+$_self = $self;
+undef $_redis;
             $self->_redis_exception( $error );
         } else {
+#FIXME: debug only
+undef $_self;
+$_redis = $redis;
             _redis_exception( $error );
         }
     };
