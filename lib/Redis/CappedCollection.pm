@@ -491,17 +491,20 @@ local _debug_switch = function ( argv_idx, func_name )
 end
 
 local cleaning_error = function ( error_msg )
-    if _DEBUG then
+-- #FIXME:
+--    if _DEBUG then
         _debug_log( {
             _STEP       = 'cleaning_error',
             error_msg   = error_msg
         } )
-    end
+--    end
 
     for _, rollback_command in ipairs( ROLLBACK ) do
         redis.call( unpack( rollback_command ) )
     end
     -- Level 2 points the error to where the function that called error was called
+-- #FIXME:
+_debug_log( { _STEP = 'cleaning_error', error_msg = '(BEFORE ERROR) ' .. error_msg } )
     error( error_msg, 2 )
 end
 
@@ -542,16 +545,19 @@ end
 local call_with_error_control = function ( list_id, data_id, ... )
     local retries = $MAX_REMOVE_RETRIES
     local ret
+    local error_msg = '<Empty error message>'
     repeat
         ret = redis.pcall( ... )
         if type( ret ) == 'table' and ret.err ~= nil then
-            if _DEBUG then
+-- #FIXME:
+--            if _DEBUG then
+                error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")",
                 _debug_log( {
                     _STEP       = 'call_with_error_control',
-                    error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")",
+                    error_msg   = error_msg,
                     retries     = retries
                 } )
-            end
+--            end
 
             cleaning( list_id, data_id, 1 )
         else
@@ -1436,10 +1442,6 @@ subtype __PACKAGE__.'::DataStr',
     message { "'".( $_ || '' )."' is not a valid data string!" }
 ;
 
-#FIXME: debug only
-my $_self;
-my $_redis;
-
 #-- constructor ----------------------------------------------------------------
 
 =head2 CONSTRUCTOR
@@ -1900,9 +1902,6 @@ sub insert {
 
     my ( $error ) = @ret;
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
@@ -2005,9 +2004,6 @@ sub update {
 
     my ( $error ) = @ret;
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
         if ( $error == $E_NO_ERROR ) {
             return 1;
@@ -2077,9 +2073,6 @@ sub upsert {
 
     my ( $error ) = @ret;
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( scalar( @ret ) == 1 && exists( $ERROR{ $error } ) ) {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
@@ -2220,9 +2213,6 @@ sub pop_oldest {
 
     my ( $error, $queue_exist, $excess_id, $excess_data ) = @ret;
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
@@ -2380,9 +2370,6 @@ sub collection_info {
 
         my $error = $results->{error};
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
         if ( exists $ERROR{ $error } ) {
             $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
             $self->_throw( $error ) if $error != $E_NO_ERROR;
@@ -2412,9 +2399,6 @@ undef $_redis;
 
         my $error = $results->{error};
 
-#FIXME: debug only
-undef $_self;
-$_redis = $redis;
         if ( exists $ERROR{ $error } ) {
             _confess( "Collection '$name.' info not received (".$ERROR{ $error }.')' )
                 if $error != $E_NO_ERROR;
@@ -2475,9 +2459,6 @@ sub list_info {
 
     my $error = $results->{error};
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
@@ -2522,9 +2503,6 @@ sub oldest_time {
 
     my $error = $results->{error};
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
@@ -2659,9 +2637,6 @@ sub lists {
         @keys = $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
     } catch {
         my $error = $_;
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
         _confess( $error ) unless $self->last_errorcode == $E_REDIS_DID_NOT_RETURN_DATA;
     };
 
@@ -2765,9 +2740,6 @@ sub resize {
                 if ( $self ) {
                     $self->_throw( $E_COLLECTION_DELETED, $msg );
                 } else {
-#FIXME: debug only
-undef $_self;
-$_redis = $redis;
                     _confess( "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')' );
                 }
             }
@@ -2874,9 +2846,6 @@ sub drop_list {
 
     my $error = $results->{error};
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
@@ -3105,14 +3074,7 @@ sub _unknown_error {
 sub _confess {
     my @args = @_;
 
-#FIXME: debug only
-use Data::Dumper;
-$Data::Dumper::Sortkeys = 1;
-my @add_messages;
-push( @add_messages, ' ', Data::Dumper->Dump( [ $_self ], [ 'self' ] ) ) if $_self;
-push( @add_messages, ' ', Data::Dumper->Dump( [ $_redis ], [ 'redis' ] ) ) if $_redis;
-
-    confess @args, @add_messages;
+    confess @args;
 }
 
 sub _make_data_key {
@@ -3182,9 +3144,6 @@ sub _verify_collection {
 sub _throw {
     my ( $self, $err, $prefix ) = @_;
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
         _confess( ( $prefix ? "$prefix : " : '' ).$ERROR{ $err } );
@@ -3251,13 +3210,8 @@ undef $_redis;
                 $self->_set_last_errorcode( $E_REDIS );
             }
 
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
         } else {
             # nothing to do now
-#FIXME: debug only
-undef $_self;
         }
 
         if ( $error =~ /\] ERR Error (?:running|compiling) script/ ) {
@@ -3324,14 +3278,8 @@ sub _call_redis {
     } catch {
         my $error = $_;
         if ( $self ) {
-#FIXME: debug only
-$_self = $self;
-undef $_redis;
             $self->_redis_exception( $error );
         } else {
-#FIXME: debug only
-undef $_self;
-$_redis = $redis;
             _redis_exception( $error );
         }
     };

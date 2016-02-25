@@ -1,5 +1,8 @@
 Revision history for Redis::CappedCollection module
 
+    FIXES:
+    - Error handling in case of lack of memory.
+
 1.05  Tue Jan  14 2016
     FIXES:
     - Error on update/upsert without $data_time in some cases (e.g. after pop_oldest).
