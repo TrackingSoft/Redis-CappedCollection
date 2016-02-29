@@ -26,6 +26,7 @@
             "Data::UUID" : "1.217",
             "JSON::XS" : "3.01",
             "Net::EmptyPort" : "0",
+            "Sys::SigAction" : "0.21",
             "Test::Exception" : "0.31",
             "Test::NoWarnings" : "1.04",
             "Test::RedisServer" : "0.04"

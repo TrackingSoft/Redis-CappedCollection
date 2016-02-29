@@ -35,6 +35,7 @@ use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
     $E_INCOMP_DATA_VERSION
+    $E_NO_ERROR
     $NAMESPACE
     );
 
@@ -84,7 +85,7 @@ is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
 is bytes::length( $coll->name ), bytes::length( '89116152-C5BD-11E1-931B-0A690A986783' ), $msg;
 is $coll->max_datasize, $Redis::CappedCollection::MAX_DATASIZE, $msg;
-is $coll->last_errorcode, 0, $msg;
+is $coll->last_errorcode, $E_NO_ERROR, $msg;
 
 $status_key  = $NAMESPACE.':S:'.$coll->name;
 $queue_key   = $NAMESPACE.':Q:'.$coll->name;

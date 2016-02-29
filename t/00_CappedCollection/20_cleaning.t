@@ -300,6 +300,7 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
             $inserted_data_size += length( $stuff );
             $list_id = int( rand( 1_000 ) ) + 1;
             $data_lists{ $data_id } = $list_id;
+            $COLLECTION->_DEBUG( Time::HiRes::time );
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
         verifying( 'insert' );
@@ -314,6 +315,7 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
         #-- cleaning himself
         $data_id = $operation_times[0];
         $list_id = $data_lists{ $data_id };
+        $COLLECTION->_DEBUG( Time::HiRes::time );
         eval { $COLLECTION->update( $list_id, $data_id, $stuff ) };
         my $error = $@;
         ok $error, 'exception';
@@ -324,6 +326,7 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
 
         #-- $E_NONEXISTENT_DATA_ID
         $data_id = 99999999;
+        $COLLECTION->_DEBUG( Time::HiRes::time );
         ok !$COLLECTION->update( $list_id, $data_id, $stuff ), 'data not exists';
 #TODO:
 # - When DATA_KEY not exists

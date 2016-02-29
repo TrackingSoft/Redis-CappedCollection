@@ -23,11 +23,14 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     update
     upsert
     receive
+    collection_exists
     collection_info
     list_info
     oldest_time
+    open
     pop_oldest
     redis_config_ok
+    resize
     list_exists
     lists
     drop_collection

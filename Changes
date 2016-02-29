@@ -1,7 +1,14 @@
 Revision history for Redis::CappedCollection module
 
+    CHANGES:
+    - Ability to force re-connection with Redis on error.
+    - Revised error codes.
+    - Better handling of errors when running out of memory.
+    - Arguments control improved.
     FIXES:
-    - Error handling in case of lack of memory.
+    - Argument 'redis' may have Redis::CappedCollection type in function
+      collection_info, collection_exists, drop_collection, redis_config_ok,
+      resize calls.
 
 1.05  Tue Jan  14 2016
     FIXES:

@@ -29,6 +29,8 @@ t/00_CappedCollection/18_info.t
 t/00_CappedCollection/19_drop.t
 t/00_CappedCollection/20_cleaning.t
 t/00_CappedCollection/21_rollback.t
+t/00_CappedCollection/22_alarm.t
+t/00_CappedCollection/23_cleaning_bench.t
 t/tlib/Redis/CappedCollection/Test/Utils.pm
 xt/author/.perlcritic.rc
 xt/author/92_vars.t

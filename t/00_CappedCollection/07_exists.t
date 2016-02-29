@@ -64,6 +64,7 @@ ok ref( $coll->_redis ) =~ /Redis/, $msg;
 my $_redis = $coll->_redis;
 ok( $coll->collection_exists( name => $coll->name ), "collection exists: ".$coll->name );
 ok( Redis::CappedCollection::collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
+ok( Redis::CappedCollection::collection_exists( redis => $coll, name => $coll->name ), "collection exists: ".$coll->name );
 ok( Redis::CappedCollection->collection_exists( redis => $_redis, name => $coll->name ), "collection exists: ".$coll->name );
 dies_ok { Redis::CappedCollection->create( redis => $redis, name => $coll->name ) } 'expecting to die: collection '.$coll->name.' already exists';
 dies_ok { Redis::CappedCollection->collection_exists() } 'expecting to die';

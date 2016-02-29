@@ -34,6 +34,8 @@ perl -MDevel::Cover t/00_CappedCollection/18_info.t
 perl -MDevel::Cover t/00_CappedCollection/19_drop.t
 perl -MDevel::Cover t/00_CappedCollection/20_cleaning.t
 perl -MDevel::Cover t/00_CappedCollection/21_rollback.t
+perl -MDevel::Cover t/00_CappedCollection/22_alarm.t
+perl -MDevel::Cover t/00_CappedCollection/23_cleaning_bench.t
 perl -MDevel::Cover xt/release/00_CappedCollection/98_pod.t
 perl -MDevel::Cover xt/release/00_CappedCollection/99_pod_coverage.t
 

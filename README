@@ -36,6 +36,7 @@ The Redis::CappedCollection module has the following optional dependencies:
    Data::UUID
    JSON::XS
    Net::EmptyPort
+   Sys::SigAction
    Test::Exception
    Test::NoWarnings
    Test::RedisServer

@@ -210,7 +210,7 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 $info = $coll->collection_info;
 is $info->{older_allowed},      0,      "OK older_allowed";
 ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
-ok $coll->resize( size => 20, older_allowed => 1 ), 'resized';
+ok $coll->resize( older_allowed => 1 ), 'resized';
 $info = $coll->collection_info;
 ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
