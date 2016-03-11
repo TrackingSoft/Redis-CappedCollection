@@ -367,7 +367,7 @@ our %ERROR = (
     $E_DATA_TOO_LARGE       => 'Data is too large',
     $E_NETWORK              => 'Error in connection to Redis server',
     $E_MAXMEMORY_LIMIT      => "Command not allowed when used memory > 'maxmemory'",
-    $E_MAXMEMORY_POLICY     => 'Redis server have incompatible maxmemory-policy setting',
+    $E_MAXMEMORY_POLICY     => "Redis server have incompatible 'maxmemory-policy' setting. Use 'noeviction' only.",
     $E_COLLECTION_DELETED   => 'Collection elements was removed prior to use',
     $E_REDIS                => 'Redis error message',
     $E_DATA_ID_EXISTS       => 'Attempt to add data to an existing ID',
@@ -1652,6 +1652,7 @@ my @_asked_parameters = qw(
     name
     max_datasize
     check_maxmemory
+    reconnect_on_error
 );
 my @_status_parameters = qw(
     older_allowed

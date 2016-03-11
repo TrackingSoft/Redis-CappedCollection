@@ -1,7 +1,7 @@
 Revision history for Redis::CappedCollection module
 
     CHANGES:
-    - Ability to force re-connection with Redis on error.
+    - Ability to force re-connection with Redis on error ('reconnect_on_error' attribute).
     - Revised error codes.
     - Better handling of errors when running out of memory.
     - Arguments control improved.

@@ -108,6 +108,8 @@ my $open_coll1 = Redis::CappedCollection->open( redis => $coll_1->_redis, name =
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
 $open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name );
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
+$open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name, reconnect_on_error => 1 );
+ok $open_coll1->name eq $coll_1->name, "correct UUID";
 dies_ok { Redis::CappedCollection->open() } "expecting to die";
 
 $coll_1->_call_redis( 'HDEL', $NAMESPACE.':S:'.$coll_1->name, 'data_version' );
@@ -119,6 +121,8 @@ like( $error, qr/$error_msg/, 'E_INCOMP_DATA_VERSION' );
 note '$@: ', $error;
 
 $coll = Redis::CappedCollection->create( redis => $redis, name => $uuid->create_str );
+isa_ok( $coll, 'Redis::CappedCollection' );
+$coll = Redis::CappedCollection->create( redis => $redis, name => $uuid->create_str, reconnect_on_error => 1 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 is $coll->_server, $redis_addr, $msg;
 ok ref( $coll->_redis ) =~ /Redis/, $msg;
