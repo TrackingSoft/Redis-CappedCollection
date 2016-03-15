@@ -19,6 +19,7 @@ build_requires:
   Net::EmptyPort: '0'
   Sys::SigAction: 0.21
   Test::Exception: '0.31'
+  Test::NoWarnings: 1.04
   Test::RedisServer: '0.04'
 dynamic_config: 1
 generated_by: 'ExtUtils::MakeMaker version 6.8, CPAN::Meta::Converter version 2.132830'

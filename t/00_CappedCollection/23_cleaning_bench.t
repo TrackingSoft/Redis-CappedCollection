@@ -64,7 +64,7 @@ SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
-    testing();
+#    testing();
 }
 
 sub testing {

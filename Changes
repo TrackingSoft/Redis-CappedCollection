@@ -2,6 +2,8 @@ Revision history for Redis::CappedCollection module
 
     CHANGES:
     - Ability to force re-connection with Redis on error ('reconnect_on_error' attribute).
+    - $DEFAULT_CONNECTION_TIMEOUT, $DEFAULT_OPERATION_TIMEOUT constants added.
+    - connection_timeout, operation_timeout attributes added.
     - Revised error codes.
     - Better handling of errors when running out of memory.
     - Arguments control improved.

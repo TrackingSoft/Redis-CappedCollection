@@ -28,6 +28,8 @@ use Exporter qw(
 
 our @EXPORT_OK  = qw(
     $DATA_VERSION
+    $DEFAULT_CONNECTION_TIMEOUT
+    $DEFAULT_OPERATION_TIMEOUT
     $DEFAULT_SERVER
     $DEFAULT_PORT
     $NAMESPACE
@@ -54,6 +56,7 @@ our @EXPORT_OK  = qw(
 
 use Carp;
 use Const::Fast;
+use Data::Dumper;
 use Digest::SHA1 qw(
     sha1_hex
 );
@@ -65,6 +68,7 @@ use Mouse::Util::TypeConstraints;
 use Params::Util qw(
     _ARRAY
     _ARRAY0
+    _HASH0
     _CLASSISA
     _INSTANCE
     _NONNEGINT
@@ -179,28 +183,42 @@ to define some type of parameters.
 
 These are the defaults:
 
-=head3 C<$DEFAULT_SERVER>
+=head3 $DEFAULT_SERVER
 
 Default Redis local server: C<'localhost'>.
 
 =cut
 const our $DEFAULT_SERVER   => 'localhost';
 
-=head3 C<$DEFAULT_PORT>
+=head3 $DEFAULT_PORT
 
 Default Redis server port: 6379.
 
 =cut
 const our $DEFAULT_PORT     => 6379;
 
-=head3 C<$NAMESPACE>
+=head3 $DEFAULT_CONNECTION_TIMEOUT
+
+Default socket timeout for connection, number of seconds: 0.1 .
+
+=cut
+const our $DEFAULT_CONNECTION_TIMEOUT  => 0.1;
+
+=head3 $DEFAULT_OPERATION_TIMEOUT
+
+Default socket timeout for read and write operations, number of seconds: 1.
+
+=cut
+const our $DEFAULT_OPERATION_TIMEOUT   => 1;
+
+=head3 $NAMESPACE
 
 Namespace name used keys on the Redis server: C<'C'>.
 
 =cut
 const our $NAMESPACE        => 'C';
 
-=head3 C<$MIN_MEMORY_RESERVE>, C<$MAX_MEMORY_RESERVE>
+=head3 $MIN_MEMORY_RESERVE, $MAX_MEMORY_RESERVE
 
 Minimum and maximum memory reserve limits based on 'maxmemory'
 configuration of the Redis server.
@@ -216,7 +234,7 @@ The following values are used by default:
 const our $MIN_MEMORY_RESERVE   => 0.05;    # 5% memory reserve coefficient
 const our $MAX_MEMORY_RESERVE   => 0.5;     # 50% memory reserve coefficient
 
-=head3 C<$DATA_VERSION>
+=head3 $DATA_VERSION
 
 Current data structure version - 3.
 
@@ -1458,6 +1476,12 @@ subtype __PACKAGE__.'::NonNegInt',
     message { ( $_ || '' ).' is not a non-negative integer!' }
 ;
 
+subtype __PACKAGE__.'::NonNegNum',
+    as 'Num',
+    where { $_ >= 0 },
+    message { ( $_ || '' ).' is not a non-negative number!' }
+;
+
 subtype __PACKAGE__.'::NonEmptNameStr',
     as 'Str',
     where { $_ ne '' && $_ !~ /:/ },
@@ -1474,7 +1498,9 @@ subtype __PACKAGE__.'::DataStr',
 
 =head2 CONSTRUCTOR
 
-=head3 C<create( redis =E<gt> $server, name =E<gt> $name, ... )>
+=head3 create
+
+    create( redis => $server, name => $name, ... )
 
 Create a new collection on the Redis server and return an C<Redis::CappedCollection>
 object to access it. Must be called as a class method only.
@@ -1519,7 +1545,13 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # Not used when C<'maxmemory'> == 0 (it is not set in the F<redis.conf>).
                         # When you add or modify the data trying to ensure
                         # reserve of free memory for metadata and bookkeeping.
-        reconnect_on_error = 0, # Controls ability to force re-connection with Redis on error.
+        reconnect_on_error  => 0,   # Controls ability to force re-connection with Redis on error.
+        connection_timeout  => $DEFAULT_CONNECTION_TIMEOUT,    # Socket timeout for connection,
+                        # number of seconds (can be fractional).
+                        # NOTE: Changes external socket configuration.
+        operation_timeout   => $DEFAULT_OPERATION_TIMEOUT,     # Socket timeout for read and write operations,
+                        # number of seconds (can be fractional).
+                        # NOTE: Changes external socket configuration.
     );
 
 The C<redis> and C<name> arguments are required.
@@ -1565,13 +1597,16 @@ sub BUILD {
         $redis->{reconnect}                 = 0     unless exists $redis->{reconnect};
         $redis->{every}                     = 1000  unless exists $redis->{every};                  # 1 ms
         $redis->{conservative_reconnect}    = 0     unless exists $redis->{conservative_reconnect};
-        $redis->{cnx_timeout}               = 0.1   unless exists $redis->{cnx_timeout};
-        $redis->{read_timeout}              = 1     unless exists $redis->{read_timeout};
-        $redis->{write_timeout}             = 1     unless exists $redis->{write_timeout};
+        $redis->{cnx_timeout}               = $DEFAULT_CONNECTION_TIMEOUT  unless exists $redis->{cnx_timeout};
+        $redis->{read_timeout}              = $DEFAULT_OPERATION_TIMEOUT   unless exists $redis->{read_timeout};
+        $redis->{write_timeout}             = $DEFAULT_OPERATION_TIMEOUT   unless exists $redis->{write_timeout};
 
         $self->_redis( $self->_redis_constructor( $redis ) );
         $self->_use_external_connection( 0 );
     }
+
+    $self->_connection_timeout_trigger( $self->connection_timeout );
+    $self->_operation_timeout_trigger( $self->operation_timeout );
 
     if ( $self->_create_from_naked_new ) {
         warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
@@ -1613,7 +1648,11 @@ sub BUILD {
 
 #-- public attributes ----------------------------------------------------------
 
-=head3 C<open( redis =E<gt> $server, name =E<gt> $name, ... )>
+=head3 open
+
+    open( redis => $server, name => $name, ... )
+
+Example:
 
     my $redis = Redis->new( server => "$server:$port" );
     my $coll = Redis::CappedCollection::open( redis => $redis, name => 'Some name' );
@@ -1653,6 +1692,8 @@ my @_asked_parameters = qw(
     max_datasize
     check_maxmemory
     reconnect_on_error
+    connection_timeout
+    operation_timeout
 );
 my @_status_parameters = qw(
     older_allowed
@@ -1697,7 +1738,7 @@ exception on receipt of an error reply, or return a non-error reply directly.
 
 =cut
 
-=head3 C<name>
+=head3 name
 
 Get collection C<name> attribute (collection ID).
 The method returns the current value of the attribute.
@@ -1711,7 +1752,7 @@ has name                   => (
     required    => 1,
 );
 
-=head3 C<redis>
+=head3 redis
 
 Existing L<Redis> object or a hash reference with parameters to create a new one.
 
@@ -1722,7 +1763,7 @@ has redis                   => (
     required    => 1,
 );
 
-=head3 C<reconnect_on_error>
+=head3 reconnect_on_error
 
 Controls ability to force re-connection with Redis on error.
 
@@ -1733,7 +1774,71 @@ has reconnect_on_error      => (
     default     => 0,
 );
 
-=head3 C<advance_cleanup_bytes>
+=head3 connection_timeout
+
+Controls socket timeout for Redis server connection, number of seconds (can be fractional).
+
+NOTE: Changes external socket configuration.
+
+=cut
+has connection_timeout      => (
+    is          => 'rw',
+    isa         => 'Maybe['.__PACKAGE__.'::NonNegNum]',
+    default     => undef,
+    trigger     => \&_connection_timeout_trigger,
+);
+
+sub _connection_timeout_trigger {
+    my ( $self, $timeout, $old_timeout ) = @_;
+
+    return if scalar( @_ ) == 2 && ( !defined( $timeout ) && !defined( $old_timeout ) );
+
+    if ( my $redis = $self->_redis ) {
+        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or confess 'Bad socket object';
+        # IO::Socket provides a way to set a timeout on the socket,
+        # but the timeout will be used only for connection,
+        # not for reading / writing operations.
+        $socket->timeout( $redis->{cnx_timeout} = $timeout );
+    }
+}
+
+=head3 operation_timeout
+
+Controls socket timeout for Redis server read and write operations, number of seconds (can be fractional).
+
+NOTE: Changes external socket configuration.
+
+=cut
+has operation_timeout       => (
+    is          => 'rw',
+    isa         => 'Maybe['.__PACKAGE__.'::NonNegNum]',
+    default     => undef,
+    trigger     => \&_operation_timeout_trigger,
+);
+
+sub _operation_timeout_trigger {
+    my ( $self, $timeout, $old_timeout ) = @_;
+
+    return if scalar( @_ ) == 2 && ( !defined( $timeout ) && !defined( $old_timeout ) );
+
+    if ( my $redis = $self->_redis ) {
+        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or confess 'Bad socket object';
+        # IO::Socket::Timeout provides a way to set a timeout
+        # on read / write operations on an IO::Socket instance,
+        # or any IO::Socket::* modules, like IO::Socket::INET.
+        if ( defined $timeout ) {
+            $redis->{write_timeout} = $redis->{read_timeout} = $timeout;
+            $redis->_maybe_enable_timeouts( $socket );
+            $socket->enable_timeout;
+        } else {
+            $redis->{write_timeout} = $redis->{read_timeout} = 0;
+            $redis->_maybe_enable_timeouts( $socket );
+            $socket->disable_timeout;
+        }
+    }
+}
+
+=head3 advance_cleanup_bytes
 
 Accessor for C<advance_cleanup_bytes> attribute - the minimum size,
 in bytes, of the data to be released in addition to memory reserve, if the size
@@ -1761,7 +1866,7 @@ has advance_cleanup_bytes   => (
     },
 );
 
-=head3 C<advance_cleanup_num>
+=head3 advance_cleanup_num
 
 The method of access to the C<advance_cleanup_num> attribute - maximum number
 of data elements to delete, if the size of the collection data after adding
@@ -1782,7 +1887,7 @@ has advance_cleanup_num     => (
     default     => 0,
 );
 
-=head3 C<max_datasize>
+=head3 max_datasize
 
 Accessor for the C<max_datasize> attribute.
 
@@ -1811,7 +1916,7 @@ has max_datasize            => (
     },
 );
 
-=head3 C<older_allowed>
+=head3 older_allowed
 
 Accessor for the C<older_allowed> attribute which controls if adding an element
 that is older than the last element removed from collection is allowed.
@@ -1827,7 +1932,7 @@ has older_allowed           => (
     default     => 0,
 );
 
-=head3 C<memory_reserve>
+=head3 memory_reserve
 
 Accessor for the C<memory_reserve> attribute which specifies the amount of additional
 memory reserved for metadata and bookkeeping.
@@ -1853,7 +1958,7 @@ has memory_reserve          => (
     },
 );
 
-=head3 C<last_errorcode>
+=head3 last_errorcode
 
 Get code of the last error.
 
@@ -1869,7 +1974,11 @@ has last_errorcode          => (
 
 #-- public methods -------------------------------------------------------------
 
-=head3 C<insert( $list_id, $data_id, $data, $data_time )>
+=head3 insert
+
+    insert( $list_id, $data_id, $data, $data_time )
+
+Example:
 
     $list_id = $coll->insert( 'Some List_id', 'Some Data_id', 'Some data' );
 
@@ -1907,8 +2016,8 @@ granularity of less than 1 second and stored with 4 decimal places.
 =back
 
 If collection is set to C<older_allowed == 1> and C<$data_time> less than time of the last removed
-element (C<last_removed_time> - see L</collection_info>) then C<last_removed_time> is set to 0.
-The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+element (C<last_removed_time> - see C<collection_info>) then C<last_removed_time> is set to 0.
+The L</older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 The method returns the ID of the data list to which the data was inserted (value of
 the C<$list_id> argument).
@@ -1968,7 +2077,11 @@ sub insert {
     return wantarray ? ( $list_id, $cleanings ) : $list_id;
 }
 
-=head3 C<update( $list_id, $data_id, $data, $new_data_time )>
+=head3 update
+
+    update( $list_id, $data_id, $data, $new_data_time )
+
+Example:
 
     if ( $coll->update( $list_id, $data_id, 'New data' ) ) {
         say "Data updated successfully";
@@ -2004,7 +2117,7 @@ data time is preserved.
 
 If the collection is set to C<older_allowed == 1> and C<$new_data_time> less than time of the last
 removed element (C<last_removed_time> - see L</collection_info>) then C<last_removed_time> is set to 0.
-The C<older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
+The L</older_allowed> attribute value is used in the L<constructor|/CONSTRUCTOR>.
 
 Method returns true if the data is updated or false if the list with the given ID does not exist or
 is used an invalid data ID.
@@ -2068,7 +2181,11 @@ sub update {
     }
 }
 
-=head3 C<upsert( $list_id, $data_id, $data, $data_time )>
+=head3 upsert
+
+    upsert( $list_id, $data_id, $data, $data_time )
+
+Example:
 
     $list_id = $coll->upsert( 'Some List_id', 'Some Data_id', 'Some data' );
 
@@ -2139,7 +2256,11 @@ sub upsert {
     return wantarray ? ( $list_id, $cleanings ) : $list_id; # as insert
 }
 
-=head3 C<receive( $list_id, $data_id )>
+=head3 receive
+
+    receive( $list_id, $data_id )
+
+Example:
 
     my @data = $coll->receive( $list_id );
     say "List '$list_id' has '$_'" foreach @data;
@@ -2222,7 +2343,7 @@ sub receive {
     }
 }
 
-=head3 C<pop_oldest>
+=head3 pop_oldest
 
 The method retrieves the oldest data stored in the collection and removes it from
 the collection.
@@ -2269,7 +2390,11 @@ sub pop_oldest {
     }
 }
 
-=head3 C<redis_config_ok( redis =E<gt> $server )>
+=head3 redis_config_ok
+
+    redis_config_ok( redis => $server )
+
+Example:
 
     say 'Redis server config ', $coll->redis_config_ok ? 'OK' : 'NOT OK';
     my $redis = Redis->new( server => "$server:$port" );
@@ -2300,7 +2425,11 @@ sub redis_config_ok {
     return _maxmemory_policy_ok( @_ );
 }
 
-=head3 C<collection_info( redis =E<gt> $server, name =E<gt> $name )>
+=head3 collection_info
+
+    collection_info( redis => $server, name => $name )
+
+Example:
 
     my $info = $coll->collection_info;
     say 'An existing collection uses ', $info->{advance_cleanup_bytes}, " byte of 'advance_cleanup_bytes', ",
@@ -2459,7 +2588,9 @@ sub collection_info {
     return $results;
 }
 
-=head3 C<list_info( $list_id )>
+=head3 list_info
+
+    list_info( $list_id )
 
 Get data list information and status.
 
@@ -2518,7 +2649,7 @@ sub list_info {
     return $results;
 }
 
-=head3 C<oldest_time>
+=head3 oldest_time
 
     my $oldest_time = $coll->oldest_time;
 
@@ -2560,7 +2691,11 @@ sub oldest_time {
     return $oldest_time;
 }
 
-=head3 C<list_exists( $list_id )>
+=head3 list_exists
+
+    list_exists( $list_id )
+
+Example:
 
     say "The collection has '$list_id' list" if $coll->list_exists( 'Some_id' );
 
@@ -2580,7 +2715,11 @@ sub list_exists {
     return $self->_call_redis( 'EXISTS', $self->_data_list_key( $list_id ) );
 }
 
-=head3 C<collection_exists( redis =E<gt> $server, name =E<gt> $name )>
+=head3 collection_exists
+
+    collection_exists( redis => $server, name => $name )
+
+Example:
 
     say 'The collection ', $coll->name, ' exists' if $coll->collection_exists;
     my $redis = Redis->new( server => "$server:$port" );
@@ -2631,7 +2770,11 @@ sub collection_exists {
     }
 }
 
-=head3 C<lists( $pattern )>
+=head3 lists
+
+    lists( $pattern )
+
+Example:
 
     say "The collection has '$_' list" foreach $coll->lists;
 
@@ -2688,7 +2831,11 @@ sub lists {
     return map { ( $_ =~ /:([^:]+)$/ )[0] } @keys;
 }
 
-=head3 C<resize( redis =E<gt> $server, name =E<gt> $name, ... )>
+=head3 resize
+
+    resize( redis => $server, name => $name, ... )
+
+Example:
 
     $coll->resize( advance_cleanup_bytes => 100_000 );
     my $redis = Redis->new( server => "$server:$port" );
@@ -2796,7 +2943,11 @@ sub resize {
     return $resized;
 }
 
-=head3 C<drop_collection( redis =E<gt> $server, name =E<gt> $name )>
+=head3 drop_collection
+
+    drop_collection( redis => $server, name => $name )
+
+Example:
 
     $coll->drop_collection;
     my $redis = Redis->new( server => "$server:$port" );
@@ -2865,9 +3016,11 @@ sub drop_collection {
     return $ret;
 }
 
-=head3 C<drop_list( $list_id )>
+=head3 drop_list
 
-Use the C<drop> method to remove the entire specified list.
+    drop_list( $list_id )
+
+Use the C<drop_list> method to remove the entire specified list.
 Method removes all the structures on the Redis server associated with
 the specified list.
 
@@ -2908,7 +3061,7 @@ sub drop_list {
     return $results->{list_removed};
 }
 
-=head3 C<clear_collection()>
+=head3 clear_collection
 
     $coll->clear_collection;
 
@@ -2942,7 +3095,7 @@ sub clear_collection {
     return $ret;
 }
 
-=head3 C<ping>
+=head3 ping
 
     $is_alive = $coll->ping;
 
@@ -2976,7 +3129,7 @@ sub ping {
     return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
 }
 
-=head3 C<quit>
+=head3 quit
 
     $coll->quit;
 
@@ -3400,26 +3553,38 @@ sub _redis_constructor {
         $self               = shift;
         $redis_parameters   = shift;
 
-        if ( $redis_parameters ) {
+        if ( _HASH0( $redis_parameters ) ) {
             $self->_set_last_errorcode( $E_NO_ERROR );
             $redis = try {
                 Redis->new( %$redis_parameters );
             } catch {
-                $self->_redis_exception( $_ );
+                my $error = $_;
+                $self->_redis_exception( "$error; (redis_parameters = "._parameters_2_str( $redis_parameters ).')' );
             };
         } else {
             $redis = $self->_redis;
         }
     } else {                                        # allow calling Foo::bar
-        $redis_parameters = shift;
+        $redis_parameters = _HASH0( shift ) or confess $ERROR{ $E_MISMATCH_ARG };
         $redis = try {
             Redis->new( %$redis_parameters );
         } catch {
-            confess "'Redis' exception: $_";
+            my $error = $_;
+            confess "'Redis' exception: $error; (redis_parameters = "._parameters_2_str( $redis_parameters ).')';
         };
     }
 
     return $redis;
+}
+
+sub _parameters_2_str {
+    my ( $parameters_hash_ref ) = @_;
+
+    my %parameters_hash = ( %$parameters_hash_ref );
+    $parameters_hash{password} =~ s/./*/g if defined $parameters_hash{password};
+
+    local $Data::Dumper::Sortkeys = 1;
+    return Data::Dumper->Dump( [ \%parameters_hash ], [ 'parameters_hash' ] );
 }
 
 # Keep in mind the default 'redis.conf' values:

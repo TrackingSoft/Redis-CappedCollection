@@ -39,12 +39,16 @@ can_ok( 'Redis::CappedCollection', $_ ) foreach qw(
     ping
     quit
 
-    max_datasize
-    last_errorcode
-    name
     advance_cleanup_bytes
     advance_cleanup_num
+    connection_timeout
+    last_errorcode
+    max_datasize
+    name
     older_allowed
+    operation_timeout
+    reconnect_on_error
+    redis
     );
 
 my $val;
