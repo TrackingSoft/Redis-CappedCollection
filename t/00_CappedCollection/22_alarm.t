@@ -181,9 +181,7 @@ sub test_alrm {
             # But have:
             my $expected_error = $coll->reconnect_on_error
                 ? $BUSY_ERROR
-                : $i == 1
-                    ? "Unknown error: $E_NO_ERROR, 1, _long_term_operation" # because _long_term_operation before loop for first iteration
-                    : "Unknown error: $E_NO_ERROR, 1"
+                : "Unknown error: \\[$E_NO_ERROR,1,'_long_term_operation'\\]" # because _long_term_operation
             ;
             throws_ok {
                 $ret = $coll->insert( $list_id, $data_id, $data, Time::HiRes::time() );

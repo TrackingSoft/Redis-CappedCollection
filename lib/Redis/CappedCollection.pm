@@ -56,7 +56,6 @@ our @EXPORT_OK  = qw(
 
 use Carp;
 use Const::Fast;
-use Data::Dumper;
 use Digest::SHA1 qw(
     sha1_hex
 );
@@ -76,6 +75,9 @@ use Params::Util qw(
     _STRING
 );
 use Redis '1.976';
+use Redis::CappedCollection::Util qw(
+    format_message
+);
 use Try::Tiny;
 
 class_type 'Redis';
@@ -1473,25 +1475,25 @@ END_LONG_TERM_OPERATION
 subtype __PACKAGE__.'::NonNegInt',
     as 'Int',
     where { $_ >= 0 },
-    message { ( $_ || '' ).' is not a non-negative integer!' }
+    message { format_message( '%s is not a non-negative integer!', $_ ) }
 ;
 
 subtype __PACKAGE__.'::NonNegNum',
     as 'Num',
     where { $_ >= 0 },
-    message { ( $_ || '' ).' is not a non-negative number!' }
+    message { format_message( '%s is not a non-negative number!', $_ ) }
 ;
 
 subtype __PACKAGE__.'::NonEmptNameStr',
     as 'Str',
     where { $_ ne '' && $_ !~ /:/ },
-    message { ( $_ || '' ).' is not a non-empty string!' }
+    message { format_message( '%s is not a non-empty string!', $_ ) }
 ;
 
 subtype __PACKAGE__.'::DataStr',
     as 'Str',
     where { bytes::length( $_ ) <= $MAX_DATASIZE },
-    message { "'".( $_ || '' )."' is not a valid data string!" }
+    message { format_message( "'%s' is not a valid data string!", $_ ) }
 ;
 
 #-- constructor ----------------------------------------------------------------
@@ -1611,7 +1613,7 @@ sub BUILD {
     if ( $self->_create_from_naked_new ) {
         warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
     } else {
-        confess "Collection '".$self->name."' already exists"
+        confess format_message( "Collection '%s' already exists", $self->name )
             if !$self->_create_from_open && $self->collection_exists( name => $self->name );
     }
 
@@ -1724,7 +1726,7 @@ sub open {
             _use_external_connection    => $use_external_connection,
         );
     } else {
-        confess "Collection '$name' does not exist";
+        confess format_message( "Collection '%s' does not exist", $name );
     };
 }
 
@@ -2574,7 +2576,7 @@ sub collection_info {
         my $error = $results->{error};
 
         if ( exists $ERROR{ $error } ) {
-            _confess( "Collection '$name.' info not received (".$ERROR{ $error }.')' )
+            _confess( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) )
                 if $error != $E_NO_ERROR;
         } else {
             _unknown_error( @ret );
@@ -2582,7 +2584,7 @@ sub collection_info {
     }
 
     my $oldest_time = $results->{oldest_time};
-    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( 'oldest_time is not a number: ', $oldest_time );
+    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( format_message( 'oldest_time is not a number: %s', $oldest_time ) );
 
     delete $results->{error};
     return $results;
@@ -2643,7 +2645,7 @@ sub list_info {
     }
 
     my $oldest_time = $results->{oldest_time};
-    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( 'oldest_time is not a number: ', $oldest_time );
+    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( format_message( 'oldest_time is not a number: %s', $oldest_time ) );
 
     delete $results->{error};
     return $results;
@@ -2686,7 +2688,7 @@ sub oldest_time {
     }
 
     my $oldest_time = $results->{oldest_time};
-    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( 'oldest_time is not a number: ', $oldest_time );
+    !$oldest_time || defined( _NUMBER( $oldest_time ) ) || warn( format_message( 'oldest_time is not a number: %s', $oldest_time ) );
 
     return $oldest_time;
 }
@@ -2890,7 +2892,7 @@ sub resize {
         if ( $self ) {
             $self->_throw( $E_MISMATCH_ARG, $error );
         } else {
-            confess "$error : ".$ERROR{ $E_MISMATCH_ARG }.')'
+            confess format_message( '%s : %s', $error, $ERROR{ $E_MISMATCH_ARG } );
         }
     }
 
@@ -2902,7 +2904,7 @@ sub resize {
                     unless _NONNEGINT( $arguments{ $parameter } );
             } elsif ( $parameter eq 'memory_reserve' ) {
                 my $memory_reserve = $arguments{ $parameter };
-                confess "'$parameter' must have a valid value"
+                confess format_message( "'%s' must have a valid value", $parameter )
                     unless _NUMBER( $memory_reserve ) && $memory_reserve >= $MIN_MEMORY_RESERVE && $memory_reserve <= $MAX_MEMORY_RESERVE;
             } elsif ( $parameter eq 'older_allowed' ) {
                 $arguments{ $parameter } = $arguments{ $parameter } ? 1 :0;
@@ -2930,7 +2932,7 @@ sub resize {
                 }
                 ++$resized;
             } else {
-                my $msg = "Parameter $parameter not updated to '$new_val' for collection '$name'";
+                my $msg = format_message( "Parameter %s not updated to '%s' for collection '%s'", $parameter, $new_val, $name );
                 if ( $self ) {
                     $self->_throw( $E_COLLECTION_DELETED, $msg );
                 } else {
@@ -3242,7 +3244,7 @@ sub _check_arguments_acceptability {
         push @unlegal_arguments, $argument unless exists $legal_arguments{ $argument };
     }
 
-    confess( 'Unknown arguments: ', join( ', ', @unlegal_arguments ) ) if @unlegal_arguments;
+    confess( format_message( 'Unknown arguments: %s', \@unlegal_arguments ) ) if @unlegal_arguments;
 
     return;
 }
@@ -3295,7 +3297,7 @@ sub _process_unknown_error {
 sub _unknown_error {
     my @args = @_;
 
-    _confess( $ERROR{ $E_UNKNOWN_ERROR }, ': ', join( ', ', map { $_ // '<undef>' } @args ) );
+    _confess( format_message( '%s: %s', $ERROR{ $E_UNKNOWN_ERROR }, \@args ) );
 }
 
 sub _confess {
@@ -3454,10 +3456,10 @@ sub _throw {
 
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
-        _confess( ( $prefix ? "$prefix : " : '' ).$ERROR{ $err } );
+        _confess( format_message( '%s%s', ( $prefix ? "$prefix : " : '' ), $ERROR{ $err } ) );
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _confess $ERROR{ $E_UNKNOWN_ERROR }, ': ', ( $prefix ? "$prefix : " : '' ), $err // '<undef>';
+        _confess( format_message( '%s: %s%s', $ERROR{ $E_UNKNOWN_ERROR }, ( $prefix ? "$prefix : " : '' ), format_message( '%s', $err ) ) );
     }
 }
 
@@ -3537,7 +3539,7 @@ sub _throw {
         if ( $error =~ /\] ERR Error (?:running|compiling) script/ ) {
             $error .= "\nLua script '$_running_script_name':\n$_running_script_body";
         }
-        _confess( $error, $err_msg || () );
+        _confess( format_message( '%s %s', $error, $err_msg ) );
     }
 }
 
@@ -3559,7 +3561,7 @@ sub _redis_constructor {
                 Redis->new( %$redis_parameters );
             } catch {
                 my $error = $_;
-                $self->_redis_exception( "$error; (redis_parameters = "._parameters_2_str( $redis_parameters ).')' );
+                $self->_redis_exception( format_message( '%s; (redis_parameters = %s)', $error, _parameters_2_str( $redis_parameters ) ) );
             };
         } else {
             $redis = $self->_redis;
@@ -3570,7 +3572,7 @@ sub _redis_constructor {
             Redis->new( %$redis_parameters );
         } catch {
             my $error = $_;
-            confess "'Redis' exception: $error; (redis_parameters = "._parameters_2_str( $redis_parameters ).')';
+            confess format_message( "'Redis' exception: %s; (redis_parameters = %s)", $error, _parameters_2_str( $redis_parameters ) );
         };
     }
 
@@ -3583,8 +3585,7 @@ sub _parameters_2_str {
     my %parameters_hash = ( %$parameters_hash_ref );
     $parameters_hash{password} =~ s/./*/g if defined $parameters_hash{password};
 
-    local $Data::Dumper::Sortkeys = 1;
-    return Data::Dumper->Dump( [ \%parameters_hash ], [ 'parameters_hash' ] );
+    return format_message( '%s', \%parameters_hash );
 }
 
 # Keep in mind the default 'redis.conf' values:
@@ -3599,7 +3600,7 @@ sub _call_redis {
 
         if ( $self->reconnect_on_error && !$self->ping ) {
             my $err_msg = $self->_reconnect();
-            _confess( $ERROR{$E_REDIS}, $err_msg ) if $err_msg;
+            _confess( format_message( '%s: %s', $ERROR{$E_REDIS}, $err_msg ) ) if $err_msg;
         }
 
         $redis = $self->_redis;
@@ -3995,6 +3996,8 @@ The basic operation of the Redis::CappedCollection package module:
 
 L<Redis::CappedCollection|Redis::CappedCollection> - Object interface to create
 a collection, addition of data and data manipulation.
+
+L<Redis::CappedCollection::Util> - String manipulation utilities.
 
 L<Redis|Redis> - Perl binding for Redis database.
 

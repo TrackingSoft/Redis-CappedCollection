@@ -7,6 +7,7 @@ Revision history for Redis::CappedCollection module
     - Revised error codes.
     - Better handling of errors when running out of memory.
     - Arguments control improved.
+    - Added the service module Redis::CappedCollection::Util.
     FIXES:
     - Argument 'redis' may have Redis::CappedCollection type in function
       collection_info, collection_exists, drop_collection, redis_config_ok,

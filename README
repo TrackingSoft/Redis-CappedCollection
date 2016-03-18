@@ -74,6 +74,7 @@ The basic operation of the Redis::CappedCollection package module:
 
    Redis::CappedCollection - Object interface to create a collection, addition
                              of data and data manipulation.
+   Redis::CappedCollection::Util - String manipulation utilities.
 
 COPYRIGHT AND LICENCE
 
