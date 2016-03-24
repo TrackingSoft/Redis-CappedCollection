@@ -1588,7 +1588,8 @@ sub BUILD {
         my $conf = $redis->conf;
         $conf->{server} = '127.0.0.1:'.$conf->{port} unless exists $conf->{server};
         $self->_server( $conf->{server} );
-        $self->_redis( Redis->new( %$conf ) );
+#        $self->_redis( Redis->new( %$conf ) );
+$self->_redis( Redis->new( server => $conf->{server} ) );
     } elsif ( _INSTANCE( $redis, __PACKAGE__ ) ) {
         $self->_server( $redis->_server );
         $self->_redis( $self->_redis );

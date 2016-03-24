@@ -56,9 +56,10 @@ my (
     $ERROR_MSG,
     $REDIS,
     $REDIS_SERVER,
+    $port,
 );
 
-( $REDIS_SERVER, $ERROR_MSG ) = verify_redis();
+( $REDIS_SERVER, $ERROR_MSG, $port ) = verify_redis();
 
 SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
@@ -125,9 +126,10 @@ sub new_connection {
         undef $REDIS_SERVER;
     }
 
+    $port = Net::EmptyPort::empty_port( $port );
     ( $REDIS_SERVER, $ERROR_MSG ) = get_redis(
         conf => {
-            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+            port                => $port,
             'maxmemory-policy'  => 'noeviction',
             $maxmemory ? ( maxmemory => $maxmemory ) : ( maxmemory => 0 ),
         },

@@ -61,9 +61,10 @@ my $msg = "attribute is set correctly";
 sub new_connect {
     # For Test::RedisServer
     $redis->stop if $redis;
+    $port = Net::EmptyPort::empty_port( $port );
     $redis = get_redis( conf =>
         {
-            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+            port                => $port,
             maxmemory           => 0,
 #            "vm-enabled"        => 'no',
             "maxmemory-policy"  => 'noeviction',

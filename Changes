@@ -12,6 +12,7 @@ Revision history for Redis::CappedCollection module
     - Argument 'redis' may have Redis::CappedCollection type in function
       collection_info, collection_exists, drop_collection, redis_config_ok,
       resize calls.
+    - Tests corrected.
 
 1.05  Tue Jan  14 2016
     FIXES:

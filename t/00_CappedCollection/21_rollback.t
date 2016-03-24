@@ -106,6 +106,7 @@ my (
     $REDIS,
     $COLLECTION,
     $ERROR_MSG,
+    $port,
 );
 
 my $CURRENT_LIST_ID = 0;
@@ -118,9 +119,10 @@ sub get_collection {
         undef $REDIS_SERVER;
     }
 
+    $port = Net::EmptyPort::empty_port( $port );
     ( $REDIS_SERVER, $ERROR_MSG ) = get_redis(
         conf => {
-            port                => Net::EmptyPort::empty_port( $DEFAULT_PORT ),
+            port                => $port,
             'maxmemory-policy'  => 'noeviction',
             maxmemory           => $MAXMEMORY,
         },
