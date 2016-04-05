@@ -38,7 +38,8 @@ use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
     $NAMESPACE
-    );
+    $DEFAULT_ADVANCE_CLEANUP_NUM
+);
 
 use Redis::CappedCollection::Test::Utils qw(
     get_redis
@@ -99,7 +100,7 @@ sub new_connect {
 $advance_cleanup_num = 0;
 $maxmemory = 0;
 new_connect();
-is $coll->advance_cleanup_num, 0, $msg;
+is $coll->advance_cleanup_num, $DEFAULT_ADVANCE_CLEANUP_NUM, $msg;
 $coll->drop_collection;
 
 $advance_cleanup_num = 5;

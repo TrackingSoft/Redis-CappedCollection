@@ -235,6 +235,7 @@ sub verifying {
         }
     }
     ok $cleanings_performed, 'cleanings performed';
+    pass sprintf( 'expected: %.2f * %.2f (%.2f) < %.2f', $LAST_REDIS_USED_MEMORY, $MEMORY_RESERVE_COEFFICIENT, $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT, $MAXMEMORY );
     ok $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT < $MAXMEMORY, 'cleaning OK';
 }
 

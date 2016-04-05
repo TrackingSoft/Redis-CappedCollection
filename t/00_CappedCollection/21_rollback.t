@@ -64,8 +64,7 @@ const my $ADVANCE_CLEANUP_BYTES => 1 * 1024;
 #                        # elements to delete, if the size
 #                        # of the collection data after adding new data
 #                        # may exceed 'maxmemory'.
-#                        # Default 0 - the number of times the deleted data
-#                        # is not limited.
+#                        # Avoid "cache stampede" effect during advanced memory cleanup.
 const my $ADVANCE_CLEANUP_NUM   => 10;
 #        max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
 #                        # Default 512MB.

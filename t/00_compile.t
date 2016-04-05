@@ -23,6 +23,7 @@ BEGIN { use_ok 'Redis::CappedCollection', qw(
     $NAMESPACE
     $MIN_MEMORY_RESERVE
     $MAX_MEMORY_RESERVE
+    $DEFAULT_ADVANCE_CLEANUP_NUM
 
     $E_NO_ERROR
     $E_MISMATCH_ARG

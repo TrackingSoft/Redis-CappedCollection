@@ -90,39 +90,39 @@ Options:
 
     --host="..."
         The server should contain an IP address of Redis server.
-        If the server is not provided, '127.0.0.1' is used as the default for the Redis server.
+        If not provided, '127.0.0.1' is used as the default.
     --port=N
         The server port.
-        Default 6379 (the default for the Redis server).
+        Default 6379 (the default for Redis server).
     --coll_name="..."
-        The collection name.
-        Default = pid.
-        Be used together with '--receive'.
+        Collection name.
+        Default = process pid.
+        To be used along with '--receive' option.
     --max_size=N
-        The maximum size, in bytes, of the capped collection data.
+        The maximum size (bytes) of capped collection data volume.
         Default 512MB.
     --advance_cleanup_bytes=N
-        The minimum size, in bytes, of the data to be released, if the size of the collection data after adding new data may exceed 'max_size'.
-        Default 0 - additional data should not be released.
+        Size (bytes) of the data to be freed should size of the collection exceed 'max_size'.
+        Default 0 - no advance cleanup performed.
     --advance_cleanup_num=N
-        The amount of data that must be removed, if the size of the collection data after adding new data may exceed 'max_size'.
-        Default 0 - additional data should not be released.
+        Number of elements to be removed from collection during advance cleanup.
+        Default 0 - no advance cleanup performed.
     --data_len=...
-        Length of the unit recording data.
-        Default 200 byte.
+        Data unit size.
+        Default 200 bytes.
     --visitors=N
-        The number of visitors (data lists) that must be created.
+        The number of lists to be created.
         Default 2_000_000.
     --run_time=...
-        Maximum, in seconds, run time.
-        Default 0 - the work is not limited.
+        Maximum run time in seconds
+        Default 0 - unlimited.
     --rate=N
-        Exponentially distributed data with RATE.
-        Default 0 - no exponentially data distributed.
+        Exponentially distribute data using provided RATE.
+        Default 0 - no exponental distribution.
     --dump=N
-        Amount of data for which to perform dump.
-        Default 0 - does not perform.
-        WARNING: Before work removes all keys from the current database.
+        Data dump volume.
+        Default 0 - do not perform dump.
+        WARNING: removes all keys from the current database.
     --receive
         Receive data instead of writing.
 HELP

@@ -35,6 +35,7 @@ our @EXPORT_OK  = qw(
     $NAMESPACE
     $MIN_MEMORY_RESERVE
     $MAX_MEMORY_RESERVE
+    $DEFAULT_ADVANCE_CLEANUP_NUM
 
     $E_NO_ERROR
     $E_MISMATCH_ARG
@@ -235,6 +236,17 @@ The following values are used by default:
 =cut
 const our $MIN_MEMORY_RESERVE   => 0.05;    # 5% memory reserve coefficient
 const our $MAX_MEMORY_RESERVE   => 0.5;     # 50% memory reserve coefficient
+
+
+=head3 $DEFAULT_ADVANCE_CLEANUP_NUM
+
+Number of additional elements to delete from collection during cleanup procedure when collection size
+exceeds 'maxmemory'.
+
+Default 100 elements. 0 means unlimited iterations - cleanup until memory reserve requirement is met.
+
+=cut
+const our $DEFAULT_ADVANCE_CLEANUP_NUM  => 100;
 
 =head3 $DATA_VERSION
 
@@ -560,40 +572,6 @@ local table_tostring = function ( tbl )
     return "{" .. table.concat( result, "," ) .. "}"
 end
 
-local call_with_error_control = function ( list_id, data_id, ... )
-    local retries = $MAX_REMOVE_RETRIES
-    local ret
-    local error_msg = '<Empty error message>'
-    repeat
-        ret = redis.pcall( ... )
-        if type( ret ) == 'table' and ret.err ~= nil then
-            if _DEBUG then
-                error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")"
-                _debug_log( {
-                    _STEP       = 'call_with_error_control',
-                    error_msg   = error_msg,
-                    retries     = retries
-                } )
-            end
-
-            cleaning( list_id, data_id, 1 )
-        else
-            break
-        end
-        retries = retries - 1
-    until retries == 0
-
-    if retries == 0 then
-        -- Operation returned an error related to not enough memory.
-        -- Start cleaning process and try to re-execute the operation.
-        -- Repeat the cycle of operation + memory cleaning a couple of times and return an error / fail,
-        -- if it still did not work.
-        cleaning_error( error_msg )
-    end
-
-    return ret
-end
-
 local is_not_enough_memory = function ()
     if _DEBUG then
         _debug_log( { _STEP = 'is_not_enough_memory started' } )
@@ -895,7 +873,45 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
                 is_advance_cleanup_num_worked_out           = is_advance_cleanup_num_worked_out,
             } )
         end
+
+        if total_bytes_deleted > 0 then
+            redis.call( 'HINCRBY', STATUS_KEY, 'last_advance_cleanup_bytes', total_bytes_deleted )
+        end
     end
+end
+
+local call_with_error_control = function ( list_id, data_id, ... )
+    local retries = $MAX_REMOVE_RETRIES
+    local ret
+    local error_msg = '<Empty error message>'
+    repeat
+        ret = redis.pcall( ... )
+        if type( ret ) == 'table' and ret.err ~= nil then
+            if _DEBUG then
+                error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")"
+                _debug_log( {
+                    _STEP       = 'call_with_error_control',
+                    error_msg   = error_msg,
+                    retries     = retries
+                } )
+            end
+
+            cleaning( list_id, data_id, 1 )
+        else
+            break
+        end
+        retries = retries - 1
+    until retries == 0
+
+    if retries == 0 then
+        -- Operation returned an error related to insufficient memory.
+        -- Start cleaning process and then re-try operation.
+        -- Repeat the cycle of operation + memory cleaning a couple of times and return an error / fail,
+        -- if it still did not work.
+        cleaning_error( error_msg )
+    end
+
+    return ret
 end
 END_CLEANING
 
@@ -941,7 +957,11 @@ end
 -- deleting obsolete data, if it is necessary
 $_lua_cleaning
 _debug_switch( 6, 'insert' )
-cleaning( list_id, data_id, 0 )
+local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+local data_len = #data
+if last_advance_cleanup_bytes < data_len then
+    cleaning( list_id, data_id, 0 )
+end
 
 -- add data to the list
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
@@ -979,6 +999,12 @@ if data_time < last_removed_time then
     redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
 end
 
+local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - data_len
+if new_last_advance_cleanup_bytes < 0 then
+    new_last_advance_cleanup_bytes = 0
+end
+redis.call( 'HSET', STATUS_KEY, 'last_advance_cleanup_bytes', new_last_advance_cleanup_bytes )
+
 return { $E_NO_ERROR, CLEANINGS }
 END_INSERT
 
@@ -1007,7 +1033,15 @@ end
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
     return { $E_NONEXISTENT_DATA_ID, 0 }
 end
-if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
+local extra_data_len
+if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
+-- #FIXME: existed_data -> existed_data_len
+-- HSTRLEN key field
+-- Available since 3.2.0.
+    local existed_data = redis.call( 'HGET', DATA_KEY, data_id )
+    extra_data_len = #data - #existed_data
+    existed_data = nil  -- free memory
+else
     return { $E_NONEXISTENT_DATA_ID, 0 }
 end
 
@@ -1021,7 +1055,10 @@ end
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
 _debug_switch( 6, 'update' )
-cleaning( list_id, data_id, 0 )
+local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+if extra_data_len > 0 and last_advance_cleanup_bytes < extra_data_len then
+    cleaning( list_id, data_id, 0 )
+end
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
@@ -1048,6 +1085,12 @@ if new_data_time ~= 0 then
         redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
     end
 end
+
+local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - extra_data_len
+if new_last_advance_cleanup_bytes < 0 then
+    new_last_advance_cleanup_bytes = 0
+end
+redis.call( 'HSET', STATUS_KEY, 'last_advance_cleanup_bytes', new_last_advance_cleanup_bytes )
 
 return { $E_NO_ERROR, CLEANINGS }
 END_UPDATE
@@ -1421,14 +1464,15 @@ if status_exist == 1 then
 else
 -- if you want to create a new collection
     redis.call( 'HMSET', STATUS_KEY,
-        'lists',                    0,
-        'items',                    0,
-        'older_allowed',            older_allowed,
-        'advance_cleanup_bytes',    advance_cleanup_bytes,
-        'advance_cleanup_num',      advance_cleanup_num,
-        'memory_reserve',           memory_reserve,
-        'data_version',             data_version,
-        'last_removed_time',        0
+        'lists',                        0,
+        'items',                        0,
+        'older_allowed',                older_allowed,
+        'advance_cleanup_bytes',        advance_cleanup_bytes,
+        'advance_cleanup_num',          advance_cleanup_num,
+        'memory_reserve',               memory_reserve,
+        'data_version',                 data_version,
+        'last_removed_time',            0,
+        'last_advance_cleanup_bytes',   0
     );
 end
 
@@ -1527,12 +1571,9 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # of the collection data after adding new data
                         # may exceed Redis server 'maxmemory' paramemter.
                         # Default 0 - additional data should not be released.
-        advance_cleanup_num => 1_000, # Maximum number of data
-                        # elements to delete, if the size
-                        # of the collection data after adding new data
-                        # may exceed 'maxmemory'.
-                        # Default 0 - the number of times the deleted data
-                        # is not limited.
+        advance_cleanup_num => 1_000, # Maximum number of additional collection
+                        # elements to delete during cleanup
+                        # Default is 100, 0 - unlimited.
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
         older_allowed   => 0, # Allow adding an element to collection that's older
@@ -1588,8 +1629,7 @@ sub BUILD {
         my $conf = $redis->conf;
         $conf->{server} = '127.0.0.1:'.$conf->{port} unless exists $conf->{server};
         $self->_server( $conf->{server} );
-#        $self->_redis( Redis->new( %$conf ) );
-$self->_redis( Redis->new( server => $conf->{server} ) );
+        $self->_redis( Redis->new( server => $conf->{server} ) );
     } elsif ( _INSTANCE( $redis, __PACKAGE__ ) ) {
         $self->_server( $redis->_server );
         $self->_redis( $self->_redis );
@@ -1871,13 +1911,12 @@ has advance_cleanup_bytes   => (
 
 =head3 advance_cleanup_num
 
-The method of access to the C<advance_cleanup_num> attribute - maximum number
-of data elements to delete, if the size of the collection data after adding
-new data may exceed C<'maxmemory'>. Default 0 - the number of times the deleted data
-is not limited.
+The method accesses C<advance_cleanup_num> attribute - maximum number
+of additional collection elements to delete during cleanup (for example, when size of collection exceeds
+C<'maxmemory'>). Default 100. 0 is unlimited.
 
-The C<advance_cleanup_num> attribute is designed to reduce the number of
-deletes data.
+The C<advance_cleanup_num> attribute is designed to reduce number of times collection cleanup takes place.
+Setting value too high may result in unwanted delays during operations with Redis.
 
 The C<advance_cleanup_num> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
@@ -1887,7 +1926,7 @@ has advance_cleanup_num     => (
     is          => 'rw',
     writer      => '_set_advance_cleanup_num',
     isa         => __PACKAGE__.'::NonNegInt',
-    default     => 0,
+    default     => 100,
 );
 
 =head3 max_datasize
@@ -3825,22 +3864,24 @@ CappedCollection package creates the following data structures on Redis:
     #                         Capped Collection id
     ...
     redis 127.0.0.1:6379> HGETALL "C:S:Some collection name"
-    1) "lists"                  # hash key
-    2) "1"                      # the key value
-    3) "items"                  # hash key
-    4) "1"                      # the key value
-    5) "older_allowed"          # hash key
-    6) "0"                      # the key value
-    7) "advance_cleanup_bytes"  # hash key
-    8) "0"                      # the key value
-    9) "advance_cleanup_num"    # hash key
-    10) "0"                     # the key value
-    11) "memory_reserve"        # hash key
-    12) "0,05"                  # the key value
-    13) "data_version"          # hash key
-    14) "3"                     # the key value
-    15) "last_removed_time"     # hash key
-    16) "0"                     # the key value
+    1) "lists"                          # hash key
+    2) "1"                              # the key value
+    3) "items"                          # hash key
+    4) "1"                              # the key value
+    5) "older_allowed"                  # hash key
+    6) "0"                              # the key value
+    7) "advance_cleanup_bytes"          # hash key
+    8) "0"                              # the key value
+    9) "advance_cleanup_num"            # hash key
+    10) "100"                           # the key value
+    11) "memory_reserve"                # hash key
+    12) "0,05"                          # the key value
+    13) "data_version"                  # hash key
+    14) "3"                             # the key value
+    15) "last_removed_time"             # hash key
+    16) "0"                             # the key value
+    17) "last_advance_cleanup_bytes"    # hash key
+    18) "0"                             # the key value
 
     #-- To store collection queue:
     # ZSET    Namespace:Q:Collection_id
