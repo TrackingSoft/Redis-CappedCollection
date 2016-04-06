@@ -278,7 +278,7 @@ while ( 1 ) {
     last if $lists != $i;
     ++$i;
 }
-is $lists, $i - 1, 'data squeezed';
+ok $lists <= $i - 1, sprintf( "data squeezed: lists < i - 1 ($lists < $i - 1)" );
 
 $coll->quit;
 lives_ok {

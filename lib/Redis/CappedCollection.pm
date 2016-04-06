@@ -655,7 +655,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
             and (
                    advance_remaining_iterations > 0
                 or ( advance_cleanup_bytes > 0 and advance_bytes_deleted < advance_cleanup_bytes )
-                or enough_memory_cleaning_needed == 1
+                or ( advance_cleanup_num == 0 and advance_cleanup_num == 0 and enough_memory_cleaning_needed == 1 )
             )
         do
             if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
@@ -887,8 +887,8 @@ local call_with_error_control = function ( list_id, data_id, ... )
     repeat
         ret = redis.pcall( ... )
         if type( ret ) == 'table' and ret.err ~= nil then
+            error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")"
             if _DEBUG then
-                error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")"
                 _debug_log( {
                     _STEP       = 'call_with_error_control',
                     error_msg   = error_msg,
@@ -1591,7 +1591,7 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # but setting 'check_maxmemory' to false can be used
                         # as a workaround.
         memory_reserve  => 0,05,    # Reserve coefficient of 'maxmemory'.
-                        # Not used when C<'maxmemory'> == 0 (it is not set in the F<redis.conf>).
+                        # Not used when 'maxmemory' == 0 (it is not set in the redis.conf).
                         # When you add or modify the data trying to ensure
                         # reserve of free memory for metadata and bookkeeping.
         reconnect_on_error  => 0,   # Controls ability to force re-connection with Redis on error.
