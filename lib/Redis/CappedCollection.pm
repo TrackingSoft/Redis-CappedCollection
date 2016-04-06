@@ -958,6 +958,9 @@ end
 $_lua_cleaning
 _debug_switch( 6, 'insert' )
 local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+if last_advance_cleanup_bytes == nil then
+    last_advance_cleanup_bytes = 0
+end
 local data_len = #data
 if last_advance_cleanup_bytes < data_len then
     cleaning( list_id, data_id, 0 )
@@ -1056,6 +1059,9 @@ end
 $_lua_cleaning
 _debug_switch( 6, 'update' )
 local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+if last_advance_cleanup_bytes == nil then
+    last_advance_cleanup_bytes = 0
+end
 if extra_data_len > 0 and last_advance_cleanup_bytes < extra_data_len then
     cleaning( list_id, data_id, 0 )
 end
