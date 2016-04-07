@@ -236,7 +236,8 @@ sub verifying {
     }
     ok $cleanings_performed, 'cleanings performed';
     pass sprintf( 'expected: %.2f * %.2f (%.2f) < %.2f', $LAST_REDIS_USED_MEMORY, $MEMORY_RESERVE_COEFFICIENT, $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT, $MAXMEMORY );
-    ok $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT < $MAXMEMORY, 'cleaning OK';
+# NOTE: $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT near by $MAXMEMORY according advance_cleanup_bytes and advance_cleanup_num';
+#    ok $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT > $MAXMEMORY, 'cleaning OK';
 }
 
 #-- Insert ---------------------------------------------------------------------
@@ -267,6 +268,8 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
             $COLLECTION->_DEBUG( $data_time );
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
+        my $last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+        ok $last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($last_advance_cleanup_bytes)";
         $last_removed_time = $COLLECTION->collection_info->{last_removed_time};
         ok $last_removed_time > 0, 'OK last_removed_time after';
         ok $last_removed_time >= $prev_time, 'OK last_removed_time';
@@ -307,12 +310,17 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
         verifying( 'insert' );
+        my $last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+        ok $last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($last_advance_cleanup_bytes)";
 
         $COLLECTION->_DEBUG( Time::HiRes::time );
         my $data_id  = $operation_times[ -100 ];    # cause $data_id == $data_time
         $list_id = $data_lists{ $data_id };
         $stuff = '@' x 100_000;
         $COLLECTION->update( $list_id, $data_id, $stuff );
+        my $new_last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+        ok $new_last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($new_last_advance_cleanup_bytes)";
+        ok $new_last_advance_cleanup_bytes != $last_advance_cleanup_bytes, 'last_advance_cleanup_bytes re-calculated';
         verifying( 'update' );
 
         #-- cleaning himself

@@ -417,6 +417,17 @@ const our $MAX_DATASIZE             => 512*1024*1024;   # A String value can be 
 const my $MAX_REMOVE_RETRIES        => 2;       # the number of remove retries when memory limit is near
 const my $USED_MEMORY_POLICY        => 'noeviction';
 
+# status field names
+const my $_LISTS                        => 'lists';
+const my $_ITEMS                        => 'items';
+const my $_OLDER_ALLOWED                => 'older_allowed';
+const my $_ADVANCE_CLEANUP_BYTES        => 'advance_cleanup_bytes';
+const my $_ADVANCE_CLEANUP_NUM          => 'advance_cleanup_num';
+const my $_MEMORY_RESERVE               => 'memory_reserve';
+const my $_DATA_VERSION                 => 'data_version';
+const my $_LAST_REMOVED_TIME            => 'last_removed_time';
+const my $_LAST_ADVANCE_CLEANUP_BYTES   => 'last_advance_cleanup_bytes';
+
 my $_lua_namespace  = "local NAMESPACE  = '".$NAMESPACE."'";
 my $_lua_queue_key  = "local QUEUE_KEY  = NAMESPACE..':Q:'..coll_name";
 my $_lua_status_key = "local STATUS_KEY = NAMESPACE..':S:'..coll_name";
@@ -499,7 +510,7 @@ end
 local _debug_switch = function ( argv_idx, func_name )
     if MEMORY_RESERVE == nil then   -- the first call
         MAXMEMORY       = tonumber( redis.call( 'CONFIG', 'GET', 'maxmemory' )[2] )
-        MEMORY_RESERVE  = tonumber( redis.call( 'HGET', STATUS_KEY, 'memory_reserve' ) )
+        MEMORY_RESERVE  = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MEMORY_RESERVE' ) )
         if MAXMEMORY == 0 then
             MEMORY_RESERVE_COEFFICIENT = 0
         else
@@ -619,11 +630,11 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
     end
 
     if enough_memory_cleaning_needed == 1 then
-        local advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'advance_cleanup_bytes' ) )
-        local advance_cleanup_num   = tonumber( redis.call( 'HGET', STATUS_KEY, 'advance_cleanup_num' ) )
+        local advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ADVANCE_CLEANUP_BYTES' ) )
+        local advance_cleanup_num   = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ADVANCE_CLEANUP_NUM' ) )
 
         -- how much data to delete obsolete data
-        local coll_items            = tonumber( redis.call( 'HGET', STATUS_KEY, 'items' ) )
+        local coll_items            = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ITEMS' ) )
         local advance_remaining_iterations = advance_cleanup_num
         if advance_remaining_iterations > coll_items then
             advance_remaining_iterations = coll_items
@@ -767,7 +778,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
             items = items - 1
             coll_items = coll_items - 1
 
-            redis.call( 'HSET', STATUS_KEY, 'last_removed_time', very_oldest_time )
+            redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', very_oldest_time )
 
             if items > 0 then
                 -- If the list has more data
@@ -827,11 +838,11 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
 
         if total_items_deleted ~= 0 then
             -- reduce the number of items in the collection
-            redis.call( 'HINCRBY', STATUS_KEY, 'items', -total_items_deleted )
+            redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -total_items_deleted )
         end
         if lists_deleted ~= 0 then
             -- reduce the number of lists stored in a collection
-            redis.call( 'HINCRBY',  STATUS_KEY, 'lists', -lists_deleted )
+            redis.call( 'HINCRBY',  STATUS_KEY, '$_LISTS', -lists_deleted )
         end
 
         if _DEBUG then
@@ -875,10 +886,12 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
         end
 
         if total_bytes_deleted > 0 then
-            redis.call( 'HINCRBY', STATUS_KEY, 'last_advance_cleanup_bytes', total_bytes_deleted )
+            redis.call( 'HINCRBY', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', total_bytes_deleted )
         end
     end
 end
+
+local last_advance_cleanup_bytes
 
 local call_with_error_control = function ( list_id, data_id, ... )
     local retries = $MAX_REMOVE_RETRIES
@@ -897,6 +910,7 @@ local call_with_error_control = function ( list_id, data_id, ... )
             end
 
             cleaning( list_id, data_id, 1 )
+            last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
         else
             break
         end
@@ -944,9 +958,9 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
 end
 
 -- Validating the time of new data, if required
-local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
+local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
 
-if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
+if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
             return { $E_OLDER_THAN_ALLOWED, 0 }
@@ -957,13 +971,15 @@ end
 -- deleting obsolete data, if it is necessary
 $_lua_cleaning
 _debug_switch( 6, 'insert' )
-local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+-- local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
+last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 if last_advance_cleanup_bytes == nil then
     last_advance_cleanup_bytes = 0
 end
 local data_len = #data
 if last_advance_cleanup_bytes < data_len then
     cleaning( list_id, data_id, 0 )
+    last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 end
 
 -- add data to the list
@@ -983,8 +999,8 @@ data = nil  -- free memory
 table.insert( ROLLBACK, 1, { 'HDEL', DATA_KEY, data_id } )
 
 if redis.call( 'HLEN', DATA_KEY ) == 1 then  -- list recreated after cleaning
-    redis.call( 'HINCRBY', STATUS_KEY, 'lists', 1 )
-    table.insert( ROLLBACK, 1, { 'HINCRBY', STATUS_KEY, 'lists', -1 } )
+    redis.call( 'HINCRBY', STATUS_KEY, '$_LISTS', 1 )
+    table.insert( ROLLBACK, 1, { 'HINCRBY', STATUS_KEY, '$_LISTS', -1 } )
     call_with_error_control( list_id, data_id, 'ZADD', QUEUE_KEY, data_time, list_id )
 else
     if items == 1 then
@@ -997,16 +1013,16 @@ else
 end
 
 -- reflect the addition of new data
-redis.call( 'HINCRBY', STATUS_KEY, 'items', 1 )
+redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', 1 )
 if data_time < last_removed_time then
-    redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
+    redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', 0 )
 end
 
 local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - data_len
 if new_last_advance_cleanup_bytes < 0 then
     new_last_advance_cleanup_bytes = 0
 end
-redis.call( 'HSET', STATUS_KEY, 'last_advance_cleanup_bytes', new_last_advance_cleanup_bytes )
+redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
 
 return { $E_NO_ERROR, CLEANINGS }
 END_INSERT
@@ -1048,8 +1064,8 @@ else
     return { $E_NONEXISTENT_DATA_ID, 0 }
 end
 
-local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_removed_time' ) )
-if redis.call( 'HGET', STATUS_KEY, 'older_allowed' ) ~= '1' then
+local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
+if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
     if new_data_time ~= 0 and new_data_time < last_removed_time then
         return { $E_OLDER_THAN_ALLOWED, 0 }
     end
@@ -1058,12 +1074,14 @@ end
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
 _debug_switch( 6, 'update' )
-local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, 'last_advance_cleanup_bytes' ) )
+--local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
+last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 if last_advance_cleanup_bytes == nil then
     last_advance_cleanup_bytes = 0
 end
 if extra_data_len > 0 and last_advance_cleanup_bytes < extra_data_len then
     cleaning( list_id, data_id, 0 )
+    last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 end
 
 -- data change
@@ -1088,7 +1106,7 @@ if new_data_time ~= 0 then
     end
 
     if new_data_time < last_removed_time then
-        redis.call( 'HSET', STATUS_KEY, 'last_removed_time', 0 )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', 0 )
     end
 end
 
@@ -1096,7 +1114,7 @@ local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - extra_data_l
 if new_last_advance_cleanup_bytes < 0 then
     new_last_advance_cleanup_bytes = 0
 end
-redis.call( 'HSET', STATUS_KEY, 'last_advance_cleanup_bytes', new_last_advance_cleanup_bytes )
+redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
 
 return { $E_NO_ERROR, CLEANINGS }
 END_UPDATE
@@ -1246,13 +1264,13 @@ else
     redis.call( 'DEL', TIME_KEY )
 
     -- reduce the number of lists stored in a collection
-    redis.call( 'HINCRBY',  STATUS_KEY, 'lists', -1 )
+    redis.call( 'HINCRBY',  STATUS_KEY, '$_LISTS', -1 )
     -- remove the name of the list from the queue collection
     redis.call( 'ZREM', QUEUE_KEY, list_id )
 end
 
-redis.call( 'HINCRBY', STATUS_KEY, 'items', -1 )
-redis.call( 'HSET', STATUS_KEY, 'last_removed_time', very_oldest_time )
+redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -1 )
+redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', very_oldest_time )
 
 return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
@@ -1274,14 +1292,14 @@ end
 
 local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
 local lists, items, older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
-        'lists',
-        'items',
-        'older_allowed',
-        'advance_cleanup_bytes',
-        'advance_cleanup_num',
-        'memory_reserve',
-        'data_version',
-        'last_removed_time'
+        '$_LISTS',
+        '$_ITEMS',
+        '$_OLDER_ALLOWED',
+        '$_ADVANCE_CLEANUP_BYTES',
+        '$_ADVANCE_CLEANUP_NUM',
+        '$_MEMORY_RESERVE',
+        '$_DATA_VERSION',
+        '$_LAST_REMOVED_TIME'
     ) )
 
 if type( data_version ) ~= 'string' then data_version = '0' end
@@ -1383,9 +1401,9 @@ $_lua_status_key
 local ret = 0   -- the number of deleted items
 
 redis.call( 'HMSET', STATUS_KEY,
-    'lists',                    0,
-    'items',                    0,
-    'last_removed_time',        0
+    '$_LISTS',                  0,
+    '$_ITEMS',                  0,
+    '$_LAST_REMOVED_TIME',      0
 );
 
 $_lua_clean_data
@@ -1429,9 +1447,9 @@ end
 redis.call( 'DEL', DATA_KEY, TIME_KEY )
 
 -- reduce the number of items in the collection
-redis.call( 'HINCRBY', STATUS_KEY, 'items', -list_items )
+redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -list_items )
 -- reduce the number of lists stored in a collection
-redis.call( 'HINCRBY', STATUS_KEY, 'lists', -1 )
+redis.call( 'HINCRBY', STATUS_KEY, '$_LISTS', -1 )
 -- remove the name of the list from the queue collection
 redis.call( 'ZREM', QUEUE_KEY, list_id )
 
@@ -1459,26 +1477,26 @@ local status_exist = redis.call( 'EXISTS', STATUS_KEY );
 if status_exist == 1 then
 -- if there is a collection
     older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
-        'older_allowed',
-        'advance_cleanup_bytes',
-        'advance_cleanup_num',
-        'memory_reserve',
-        'data_version'
+        '$_OLDER_ALLOWED',
+        '$_ADVANCE_CLEANUP_BYTES',
+        '$_ADVANCE_CLEANUP_NUM',
+        '$_MEMORY_RESERVE',
+        '$_DATA_VERSION'
     ) );
 
     if type( data_version ) ~= 'string' then data_version = '0' end
 else
 -- if you want to create a new collection
     redis.call( 'HMSET', STATUS_KEY,
-        'lists',                        0,
-        'items',                        0,
-        'older_allowed',                older_allowed,
-        'advance_cleanup_bytes',        advance_cleanup_bytes,
-        'advance_cleanup_num',          advance_cleanup_num,
-        'memory_reserve',               memory_reserve,
-        'data_version',                 data_version,
-        'last_removed_time',            0,
-        'last_advance_cleanup_bytes',   0
+        '$_LISTS',                      0,
+        '$_ITEMS',                      0,
+        '$_OLDER_ALLOWED',              older_allowed,
+        '$_ADVANCE_CLEANUP_BYTES',      advance_cleanup_bytes,
+        '$_ADVANCE_CLEANUP_NUM',        advance_cleanup_num,
+        '$_MEMORY_RESERVE',             memory_reserve,
+        '$_DATA_VERSION',               data_version,
+        '$_LAST_REMOVED_TIME',          0,
+        '$_LAST_ADVANCE_CLEANUP_BYTES', 0
     );
 end
 
@@ -1497,7 +1515,7 @@ local coll_name         = ARGV[1];
 local return_as_insert  = tonumber( ARGV[2] );
 
 local STATUS_KEY            = 'C:S:'..coll_name;
-local DATA_VERSION_KEY      = 'data_version';
+local DATA_VERSION_KEY      = '$_DATA_VERSION';
 
 local LIST                  = 'Test_list';
 local DATA                  = 'Data';
