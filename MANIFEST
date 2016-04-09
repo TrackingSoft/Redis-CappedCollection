@@ -33,6 +33,7 @@ t/00_CappedCollection/21_rollback.t
 t/00_CappedCollection/22_alarm.t
 t/00_CappedCollection/23_cleaning_bench.t
 t/00_CappedCollection/24_timeout.t
+t/00_CappedCollection/25_cleaning_correctness.t
 t/tlib/Redis/CappedCollection/Test/Utils.pm
 xt/author/.perlcritic.rc
 xt/author/92_vars.t

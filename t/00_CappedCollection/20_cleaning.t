@@ -283,7 +283,7 @@ ok $time_grows, 'last_removed_time grows';
 #-- Update ---------------------------------------------------------------------
 
 $MAXMEMORY = 2_000_000;
-foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
+foreach my $current_advance_cleanup_bytes ( 0, 100 ) {
     foreach my $current_advance_cleanup_num ( 0, 100, 10_000 ) {
         new_connection(
             undef,      # name

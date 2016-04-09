@@ -481,6 +481,8 @@ local table_merge = function ( t1, t2 )
     end
 end
 
+local FIRST_REDIS_USED_MEMORY = 0
+
 local get_memory_used = function ()
     -- used_memory_lua included
     local redis_used_memory = string.match(
@@ -488,6 +490,9 @@ local get_memory_used = function ()
         'used_memory:(%d+)'
     )
     LAST_REDIS_USED_MEMORY = tonumber( redis_used_memory )
+    if FIRST_REDIS_USED_MEMORY == 0 then
+        FIRST_REDIS_USED_MEMORY = LAST_REDIS_USED_MEMORY
+    end
 end
 
 local _debug_log = function ( values )
@@ -583,7 +588,7 @@ local table_tostring = function ( tbl )
     return "{" .. table.concat( result, "," ) .. "}"
 end
 
-local is_not_enough_memory = function ()
+local is_not_enough_memory = function ( extra_data_len )
     if _DEBUG then
         _debug_log( { _STEP = 'is_not_enough_memory started' } )
     end
@@ -596,7 +601,7 @@ local is_not_enough_memory = function ()
         _debug_log( { _STEP = 'is_not_enough_memory analysed' } )
     end
 
-    if LAST_REDIS_USED_MEMORY * MEMORY_RESERVE_COEFFICIENT >= MAXMEMORY then
+    if LAST_REDIS_USED_MEMORY + extra_data_len > math.floor( MAXMEMORY / MEMORY_RESERVE_COEFFICIENT ) then
         if _DEBUG then
             _debug_log( {
                 _STEP       = 'is_not_enough_memory'
@@ -609,8 +614,10 @@ local is_not_enough_memory = function ()
     end
 end
 
+local BYTES_DELETED = 0
+
 -- deleting old data to make room for new data
-local cleaning = function ( list_id, data_id, is_forced_cleaning )
+local cleaning = function ( list_id, data_id, extra_data_len, is_forced_cleaning )
     local memory_reserve
     local enough_memory_cleaning_needed = 0
 
@@ -618,7 +625,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
     if is_forced_cleaning == 1 then
         enough_memory_cleaning_needed = 1
     else
-        enough_memory_cleaning_needed = is_not_enough_memory()
+        enough_memory_cleaning_needed = is_not_enough_memory( extra_data_len )
     end
 
     if _DEBUG then
@@ -719,7 +726,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
 
             -- actually remove the oldest item
             if _DEBUG then
-                local current_is_not_enough_memory                              = is_not_enough_memory()
+                local current_is_not_enough_memory                              = is_not_enough_memory( extra_data_len )
                 local advance_cleanup_bytes_yet_remains                         = advance_cleanup_bytes > 0 and advance_bytes_deleted < advance_cleanup_bytes
 
                 local because_is_forced_cleaning                                = is_forced_cleaning
@@ -829,7 +836,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
             end
 
             if enough_memory_cleaning_needed == 1 then
-                enough_memory_cleaning_needed = is_not_enough_memory()
+                enough_memory_cleaning_needed = is_not_enough_memory( extra_data_len )
             end
 
             cleaning_iteration = cleaning_iteration + 1
@@ -846,7 +853,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
         end
 
         if _DEBUG then
-            local is_enough_memory                          = is_not_enough_memory() == 0
+            local is_enough_memory                          = is_not_enough_memory( extra_data_len ) == 0
             local is_memory_cleared                         = total_bytes_deleted > 0 and total_bytes_deleted > 0
             local is_advance_cleanup_bytes                  = advance_cleanup_bytes > 0
             local is_advance_cleanup_bytes_worked_out       = advance_bytes_deleted >= advance_cleanup_bytes
@@ -887,6 +894,7 @@ local cleaning = function ( list_id, data_id, is_forced_cleaning )
 
         if total_bytes_deleted > 0 then
             redis.call( 'HINCRBY', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', total_bytes_deleted )
+            BYTES_DELETED = BYTES_DELETED + total_bytes_deleted
         end
     end
 end
@@ -909,7 +917,7 @@ local call_with_error_control = function ( list_id, data_id, ... )
                 } )
             end
 
-            cleaning( list_id, data_id, 1 )
+            cleaning( list_id, data_id, 0, 1 )
             last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
         else
             break
@@ -949,12 +957,12 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $E_COLLECTION_DELETED, 0 }
+    return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
-    return { $E_DATA_ID_EXISTS, 0 }
+    return { $E_DATA_ID_EXISTS, 0, 0, 0 }
 end
 
 -- Validating the time of new data, if required
@@ -963,7 +971,7 @@ local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMO
 if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
-            return { $E_OLDER_THAN_ALLOWED, 0 }
+            return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
         end
     end
 end
@@ -971,14 +979,13 @@ end
 -- deleting obsolete data, if it is necessary
 $_lua_cleaning
 _debug_switch( 6, 'insert' )
--- local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 if last_advance_cleanup_bytes == nil then
     last_advance_cleanup_bytes = 0
 end
 local data_len = #data
 if last_advance_cleanup_bytes < data_len then
-    cleaning( list_id, data_id, 0 )
+    cleaning( list_id, data_id, #data, 0 )
     last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 end
 
@@ -1024,7 +1031,7 @@ if new_last_advance_cleanup_bytes < 0 then
 end
 redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
 
-return { $E_NO_ERROR, CLEANINGS }
+return { $E_NO_ERROR, CLEANINGS, FIRST_REDIS_USED_MEMORY, BYTES_DELETED }
 END_INSERT
 
 $lua_script_body{update} = <<"END_UPDATE";
@@ -1047,10 +1054,10 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
-    return { $E_COLLECTION_DELETED, 0 }
+    return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
-    return { $E_NONEXISTENT_DATA_ID, 0 }
+    return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 local extra_data_len
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
@@ -1061,33 +1068,32 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
     extra_data_len = #data - #existed_data
     existed_data = nil  -- free memory
 else
-    return { $E_NONEXISTENT_DATA_ID, 0 }
+    return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
 if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
     if new_data_time ~= 0 and new_data_time < last_removed_time then
-        return { $E_OLDER_THAN_ALLOWED, 0 }
+        return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
     end
 end
 
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
 _debug_switch( 6, 'update' )
---local last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 if last_advance_cleanup_bytes == nil then
     last_advance_cleanup_bytes = 0
 end
 if extra_data_len > 0 and last_advance_cleanup_bytes < extra_data_len then
-    cleaning( list_id, data_id, 0 )
+    cleaning( list_id, data_id, extra_data_len, 0 )
     last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
 end
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
-    return { $E_NONEXISTENT_DATA_ID, 0 }
+    return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
 -- data to be changed were not removed
@@ -1116,7 +1122,7 @@ if new_last_advance_cleanup_bytes < 0 then
 end
 redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
 
-return { $E_NO_ERROR, CLEANINGS }
+return { $E_NO_ERROR, CLEANINGS, FIRST_REDIS_USED_MEMORY, BYTES_DELETED }
 END_UPDATE
 
 $lua_script_body{upsert} = <<"END_UPSERT";
@@ -1534,7 +1540,7 @@ while i < MAX_WORKING_CYCLES do
 end
 
 if return_as_insert == 1 then
-    return { $E_NO_ERROR, 0 };
+    return { $E_NO_ERROR, 0, 0, 0 };
 else
     return { $E_NO_ERROR, ret, '_long_term_operation' };
 end
@@ -2120,9 +2126,9 @@ sub insert {
         $self->_DEBUG,
     );
 
-    my ( $error, $cleanings ) = @ret;
+    my ( $error, $_cleanings, $_used_memory, $_bytes_deleted ) = @ret;
 
-    if ( scalar( @ret ) == 2 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $cleanings ) ) ) {
+    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_cleanings ) ) ) {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
@@ -2140,7 +2146,7 @@ sub insert {
         $self->_process_unknown_error( @ret );
     }
 
-    return wantarray ? ( $list_id, $cleanings ) : $list_id;
+    return wantarray ? ( $list_id, $_cleanings, $_used_memory, $_bytes_deleted ) : $list_id;
 }
 
 =head3 update
@@ -2225,11 +2231,11 @@ sub update {
         $self->_DEBUG,
     );
 
-    my ( $error, $cleanings ) = @ret;
+    my ( $error, $_cleanings, $_used_memory, $_bytes_deleted ) = @ret;
 
-    if ( scalar( @ret ) == 2 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $cleanings ) ) ) {
+    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_cleanings ) ) ) {
         if ( $error == $E_NO_ERROR ) {
-            return wantarray ? ( 1, $cleanings ) : 1;
+            return wantarray ? ( 1, $_cleanings, $_used_memory, $_bytes_deleted ) : 1;
         } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
             return 0;
         } elsif (
@@ -2299,7 +2305,7 @@ sub upsert {
 
     my ( $error, $cleanings ) = @ret;
 
-    if ( scalar( @ret ) == 2 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $cleanings ) ) ) {
+    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $cleanings ) ) ) {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {

@@ -65,8 +65,10 @@ SKIP: {
     # For Test::RedisServer
     isa_ok( $redis, 'Test::RedisServer' );
 
-    test_alrm();
-    test_timeout();
+    if ( $ENV{AUTHOR_TESTS} ) {
+        test_alrm();
+        test_timeout();
+    }
 }
 
 sub test_timeout {
