@@ -50,41 +50,12 @@ use Redis::CappedCollection::Test::Utils qw(
 const my $FILLER                => '#';
 
 #-- Collection settings
-#        redis   => { server => "$server:$port" },   # Redis object
-#                        # or hash reference to parameters to create a new Redis object.
-#        name    => 'Some name', # Redis::CappedCollection collection name.
 const my $COLLECTION_NAME       => $FILLER x 40;
-#        advance_cleanup_bytes => 50_000, # The minimum size, in bytes,
-#                        # of the data to be released, if the size
-#                        # of the collection data after adding new data
-#                        # may exceed Redis server 'maxmemory' paramemter.
-#                        # Default 0 - additional data should not be released.
-const my $ADVANCE_CLEANUP_BYTES => 1 * 1024;
-#        advance_cleanup_num => 1_000, # Maximum number of data
-#                        # elements to delete, if the size
-#                        # of the collection data after adding new data
-#                        # may exceed 'maxmemory'.
-#                        # Avoid "cache stampede" effect during advanced memory cleanup.
-const my $ADVANCE_CLEANUP_NUM   => 10;
-#        max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
-#                        # Default 512MB.
+const my $MIN_CLEANUP_BYTES     => 1 * 1024;
+const my $MIN_CLEANUP_ITEMS     => 10;
 const my $MAX_DATASIZE          => 4 * 1024;    # 4k
-#        older_allowed   => 0, # Allow adding an element to collection that's older
-#                        # than the last element removed from collection.
-#                        # Default 0.
 const my $OLDER_ALLOWED         => 0;
-#        check_maxmemory => 1, # Controls if collection should try to find out maximum
-#                        # available memory from Redis.
-#                        # In some cases Redis implementation forbids such request,
-#                        # but setting 'check_maxmemory' to false can be used
-#                        # as a workaround. In this case we assume that
-#                        # 'maxmemory-policy' is 'volatile-lru'
-#                        # (default value in 'redis.conf').
 const my $CHECK_MAXMEMORY       => 1;
-#        memory_reserve  => 0,05,    # Reserve coefficient of 'maxmemory'.
-#                        # Not used when C<'maxmemory'> == 0 (it is not set in the F<redis.conf>).
-#                        # When you add or modify the data trying to ensure
-#                        # reserve of free memory for metadata and bookkeeping.
 const my $MEMORY_RESERVE        => 0.05;
 
 #TODO:
@@ -133,8 +104,8 @@ sub get_collection {
         redis                   => $REDIS_SERVER,
         name                    => $COLLECTION_NAME,
         'older_allowed'         => $OLDER_ALLOWED,
-        'advance_cleanup_bytes' => $ADVANCE_CLEANUP_BYTES,
-        'advance_cleanup_num'   => $ADVANCE_CLEANUP_NUM,
+        'min_cleanup_bytes'     => $MIN_CLEANUP_BYTES,
+        'min_cleanup_items'     => $MIN_CLEANUP_ITEMS,
         memory_reserve          => $MEMORY_RESERVE,
     );
     isa_ok( $COLLECTION, 'Redis::CappedCollection' );

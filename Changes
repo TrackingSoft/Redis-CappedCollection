@@ -10,6 +10,10 @@ Revision history for Redis::CappedCollection module
     - Arguments control improved.
     - Added the service module Redis::CappedCollection::Util.
     - Avoid "cache stampede" effect during advanced memory cleanup.
+    - Attributes 'advance_cleanup_bytes' and 'advance_cleanup_num' renamed to
+      'min_cleanup_bytes' and 'min_cleanup_items'.
+    - $DEFAULT_ADVANCED_CLEANUP_BYTES, $DEFAULT_ADVANCE_CLEANUP_NUM renamed to
+      $DEFAULT_MIN_CLEANUP_BYTES, $DEFAULT_MIN_CLEANUP_ITEMS .
     FIXES:
     - Argument 'redis' may have Redis::CappedCollection type in function
       collection_info, collection_exists, drop_collection, redis_config_ok,

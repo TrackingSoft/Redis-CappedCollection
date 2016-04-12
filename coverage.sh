@@ -28,8 +28,8 @@ perl -MDevel::Cover t/00_CappedCollection/10_quit.t
 perl -MDevel::Cover t/00_CappedCollection/11_max_datasize.t
 perl -MDevel::Cover t/00_CappedCollection/12_last_errorcode.t
 perl -MDevel::Cover t/00_CappedCollection/13_name.t
-perl -MDevel::Cover t/00_CappedCollection/15_advance_cleanup_bytes.t
-perl -MDevel::Cover t/00_CappedCollection/17_advance_cleanup_num.t
+perl -MDevel::Cover t/00_CappedCollection/15_min_cleanup_bytes.t
+perl -MDevel::Cover t/00_CappedCollection/17_min_cleanup_items.t
 perl -MDevel::Cover t/00_CappedCollection/18_info.t
 perl -MDevel::Cover t/00_CappedCollection/19_drop.t
 perl -MDevel::Cover t/00_CappedCollection/20_cleaning.t
@@ -38,6 +38,7 @@ perl -MDevel::Cover t/00_CappedCollection/22_alarm.t
 perl -MDevel::Cover t/00_CappedCollection/23_cleaning_bench.t
 perl -MDevel::Cover t/00_CappedCollection/24_timeout.t
 perl -MDevel::Cover t/00_CappedCollection/25_cleaning_correctness.t
+perl -MDevel::Cover t/00_CappedCollection/26_script_variable_protection.t
 perl -MDevel::Cover xt/release/00_CappedCollection/98_pod.t
 perl -MDevel::Cover xt/release/00_CappedCollection/99_pod_coverage.t
 

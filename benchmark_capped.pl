@@ -41,8 +41,8 @@ my $empty_port;
 my $server;
 my $redis;
 my $max_size                = 512 * 1024 * 1024;    # 512MB
-my $advance_cleanup_bytes   = 0;
-my $advance_cleanup_num     = 0;
+my $min_cleanup_bytes       = 0;
+my $min_cleanup_items       = 0;
 my $max_lists               = 2_000_000;
 my $data_len                = 200;
 my $run_time                = 0;
@@ -66,8 +66,8 @@ my $ret = GetOptions(
     'port=i'                    => \$port,
     'coll_name=s'               => \$coll_name,
     'max_size=i'                => \$max_size,
-    'advance_cleanup_bytes=i'   => \$advance_cleanup_bytes,
-    'advance_cleanup_num=i'     => \$advance_cleanup_num,
+    'min_cleanup_bytes=i'       => \$min_cleanup_bytes,
+    'min_cleanup_items=i'       => \$min_cleanup_items,
     'data_len=i'                => \$data_len,
     'visitors=i'                => \$max_lists,
     'run_time=i'                => \$run_time,
@@ -80,7 +80,7 @@ my $ret = GetOptions(
 if ( !$ret || $help )
 {
     print <<'HELP';
-Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--advance_cleanup_bytes=...] [--advance_cleanup_num=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--dump=...] [--receive] [--help]
+Usage: $0 [--host="..."] [--port=...] [--coll_name="..."] [--max_size=...] [--min_cleanup_bytes=...] [--min_cleanup_items=...] [--data_len=...] [--visitors=...] [--run_time=...] [--rate=...] [--dump=...] [--receive] [--help]
 
 Start a Redis client, connect to the Redis server, randomly inserts or receives data
 
@@ -101,10 +101,10 @@ Options:
     --max_size=N
         The maximum size (bytes) of capped collection data volume.
         Default 512MB.
-    --advance_cleanup_bytes=N
+    --min_cleanup_bytes=N
         Size (bytes) of the data to be freed should size of the collection exceed 'max_size'.
         Default 0 - no advance cleanup performed.
-    --advance_cleanup_num=N
+    --min_cleanup_items=N
         Number of elements to be removed from collection during advance cleanup.
         Default 0 - no advance cleanup performed.
     --data_len=...
@@ -163,8 +163,8 @@ sub client_info {
         "maxmemory-policy       ", ( $redis->config_get( 'maxmemory-policy' ) )[1], "\n",
         "maxmemory              ", ( $redis->config_get( 'maxmemory' ) )[1],        "\n",
         "max_size               $max_size",                     "\n",
-        "advance_cleanup_bytes  $advance_cleanup_bytes",        "\n",
-        "advance_cleanup_num    $advance_cleanup_num",          "\n",
+        "min_cleanup_bytes      $min_cleanup_bytes",            "\n",
+        "min_cleanup_items      $min_cleanup_items",              "\n",
         "max_lists              $max_lists",                    "\n",
         "rate                   $rate",                         "\n",
         "dump                   $dump",                         "\n",
@@ -303,8 +303,8 @@ $coll = Redis::CappedCollection->create(
     redis   => $redis,
     name    => $coll_name,
     $receive ? () : (
-        advance_cleanup_bytes   => $advance_cleanup_bytes,
-        advance_cleanup_num     => $advance_cleanup_num,
+        min_cleanup_bytes   => $min_cleanup_bytes,
+        min_cleanup_items   => $min_cleanup_items,
     ),
 );
 

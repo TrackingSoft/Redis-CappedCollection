@@ -24,8 +24,8 @@ t/00_CappedCollection/10_quit.t
 t/00_CappedCollection/11_max_datasize.t
 t/00_CappedCollection/12_last_errorcode.t
 t/00_CappedCollection/13_name.t
-t/00_CappedCollection/15_advance_cleanup_bytes.t
-t/00_CappedCollection/17_advance_cleanup_num.t
+t/00_CappedCollection/15_min_cleanup_bytes.t
+t/00_CappedCollection/17_min_cleanup_items.t
 t/00_CappedCollection/18_info.t
 t/00_CappedCollection/19_drop.t
 t/00_CappedCollection/20_cleaning.t
@@ -34,6 +34,7 @@ t/00_CappedCollection/22_alarm.t
 t/00_CappedCollection/23_cleaning_bench.t
 t/00_CappedCollection/24_timeout.t
 t/00_CappedCollection/25_cleaning_correctness.t
+t/00_CappedCollection/26_script_variable_protection.t
 t/tlib/Redis/CappedCollection/Test/Utils.pm
 xt/author/.perlcritic.rc
 xt/author/92_vars.t

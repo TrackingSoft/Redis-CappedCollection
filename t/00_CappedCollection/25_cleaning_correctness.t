@@ -68,39 +68,39 @@ SKIP: {
 
     $MAXMEMORY = 1_000_000;
 
-    # $advance_cleanup_bytes > 0 && $advance_cleanup_num == 0 
+    # $min_cleanup_bytes > 0 && $min_cleanup_items == 0 
     test_insert(
-        'advance_cleanup_bytes' => 10_000,
-        'advance_cleanup_num'   => 0,
-        data_length             => 200,
+        'min_cleanup_bytes' => 10_000,
+        'min_cleanup_items' => 0,
+        data_length         => 200,
     );
 
-    # $advance_cleanup_bytes == 0 && $advance_cleanup_num > 0
+    # $min_cleanup_bytes == 0 && $min_cleanup_items > 0
     test_insert(
-        'advance_cleanup_bytes' => 0,
-        'advance_cleanup_num'   => 10,
-        data_length             => 200,
+        'min_cleanup_bytes' => 0,
+        'min_cleanup_items' => 10,
+        data_length         => 200,
     );
 
-    # $advance_cleanup_bytes > 0 && $advance_cleanup_num > 0 && $advance_cleanup_bytes > $advance_cleanup_num * $data_length
+    # $min_cleanup_bytes > 0 && $min_cleanup_items > 0 && $min_cleanup_bytes > $min_cleanup_items * $data_length
     test_insert(
-        'advance_cleanup_bytes' => 10_000,
-        'advance_cleanup_num'   => 10,
-        data_length             => 200,
+        'min_cleanup_bytes' => 10_000,
+        'min_cleanup_items' => 10,
+        data_length         => 200,
     );
 
-    # $advance_cleanup_bytes > 0 && $advance_cleanup_num > 0 && $advance_cleanup_bytes > $advance_cleanup_num * $data_length
+    # $min_cleanup_bytes > 0 && $min_cleanup_items > 0 && $min_cleanup_bytes > $min_cleanup_items * $data_length
     test_insert(
-        'advance_cleanup_bytes' => 1_000,
-        'advance_cleanup_num'   => 10,
-        data_length             => 200,
+        'min_cleanup_bytes' => 1_000,
+        'min_cleanup_items' => 10,
+        data_length         => 200,
     );
 
-    # $advance_cleanup_bytes == 0 && $advance_cleanup_num == 0
+    # $min_cleanup_bytes == 0 && $min_cleanup_items == 0
     test_insert(
-        'advance_cleanup_bytes' => 0,
-        'advance_cleanup_num'   => 0,
-        data_length             => 200,
+        'min_cleanup_bytes' => 0,
+        'min_cleanup_items' => 0,
+        data_length         => 200,
     );
 }
 
@@ -109,13 +109,13 @@ exit;
 sub test_insert {
     my %args = @_;
 
-    my $advance_cleanup_bytes   = $args{advance_cleanup_bytes};
-    my $advance_cleanup_num     = $args{advance_cleanup_num};
-    my $data_length             = $args{data_length};
+    my $min_cleanup_bytes   = $args{min_cleanup_bytes};
+    my $min_cleanup_items   = $args{min_cleanup_items};
+    my $data_length         = $args{data_length};
 
     new_connection(
-        'advance_cleanup_bytes' => $advance_cleanup_bytes,
-        'advance_cleanup_num'   => $advance_cleanup_num,
+        'min_cleanup_bytes' => $min_cleanup_bytes,
+        'min_cleanup_items' => $min_cleanup_items,
     );
     $MEMORY_RESERVE = $COLLECTION->memory_reserve;
     $MAX_DATA_BYTES_AVAILABLE = max_data_bytes_available();
@@ -126,8 +126,8 @@ sub test_insert {
     my (
         $BEFORE_info,
         $AFTER_info,
-        $BEFORE_last_advance_cleanup_bytes,
-        $AFTER_last_advance_cleanup_bytes,
+        $BEFORE_last_cleanup_bytes,
+        $AFTER_last_cleanup_bytes,
         $BEFORE_used_memory,
         $AFTER_used_memory,
     );
@@ -138,7 +138,7 @@ sub test_insert {
         my $data_id = $data_time;
 
         $BEFORE_info = $COLLECTION->collection_info;
-        $BEFORE_last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+        $BEFORE_last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
         $BEFORE_used_memory = get_used_memory();
 
         my ( undef, $INSIDE_cleanings, $INSIDE_used_memory, $INSIDE_bytes_deleted ) = $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
@@ -148,10 +148,10 @@ sub test_insert {
 
         $AFTER_used_memory = get_used_memory();
         $AFTER_info = $COLLECTION->collection_info;
-        $AFTER_last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+        $AFTER_last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
 
         if ( $AFTER_info->{last_removed_time} ) {   # cleaning
-            pass "NOTE: advance_cleanup_bytes = $advance_cleanup_bytes, advance_cleanup_num = $advance_cleanup_num";
+            diag "min_cleanup_bytes = $min_cleanup_bytes, min_cleanup_items = $min_cleanup_items";
             pass "added $total_bytes_added bytes from $MAX_DATA_BYTES_AVAILABLE available";
             pass "expected used memory = $expected_used_memory, used memory = $BEFORE_used_memory -> $AFTER_used_memory";
             ok $expected_used_memory > $MAX_DATA_BYTES_AVAILABLE, 'excess data';
@@ -160,28 +160,27 @@ sub test_insert {
 
             pass "INSIDE_cleanings = $INSIDE_cleanings";
             if (
-                       ( $advance_cleanup_bytes > 0 && $advance_cleanup_num == 0 )
-                    || ( $advance_cleanup_bytes > 0 && $advance_cleanup_num > 0 && $advance_cleanup_bytes > $advance_cleanup_num * $data_length )
+                       ( $min_cleanup_bytes > 0 && $min_cleanup_items == 0 )
+                    || ( $min_cleanup_bytes > 0 && $min_cleanup_items > 0 && $min_cleanup_bytes > $min_cleanup_items * $data_length )
                 ) {
-                ok $INSIDE_cleanings ==
-                      ( $advance_cleanup_bytes / $data_length )
-                    + ( ( $advance_cleanup_bytes % $data_length ) ? 1 : 0 )
-                    + 1,
+                is $INSIDE_cleanings,
+                      ( $min_cleanup_bytes / $data_length )
+                    + ( ( $min_cleanup_bytes % $data_length ) ? 1 : 0 ),
                     'OK cleanings'
                 ;
-                ok $AFTER_last_advance_cleanup_bytes > 0, 'data cleaned (bytes)';
-                is $AFTER_last_advance_cleanup_bytes, $advance_cleanup_bytes, 'bigger $advance_cleanup_bytes';
+                ok $AFTER_last_cleanup_bytes > 0, 'data cleaned (bytes)';
+                is $AFTER_last_cleanup_bytes, $min_cleanup_bytes, 'bigger $min_cleanup_bytes';
             } elsif (
-                       ( $advance_cleanup_bytes == 0 && $advance_cleanup_num > 0 )
-                    || ( $advance_cleanup_bytes > 0 && $advance_cleanup_num > 0 && $advance_cleanup_bytes < $advance_cleanup_num * $data_length )
+                       ( $min_cleanup_bytes == 0 && $min_cleanup_items > 0 )
+                    || ( $min_cleanup_bytes > 0 && $min_cleanup_items > 0 && $min_cleanup_bytes < $min_cleanup_items * $data_length )
                 ) {
-                is $INSIDE_cleanings, $advance_cleanup_num + 1, 'OK cleanings';
-                ok $AFTER_last_advance_cleanup_bytes > 0, 'data cleaned (bytes)';
-                is $AFTER_last_advance_cleanup_bytes, $advance_cleanup_num * $data_length, 'bigger $advance_cleanup_num';
-            } elsif ( $advance_cleanup_bytes == 0 && $advance_cleanup_num == 0 ) {
+                is $INSIDE_cleanings, $min_cleanup_items, 'OK cleanings';
+                ok $AFTER_last_cleanup_bytes > 0, 'data cleaned (bytes)';
+                is $AFTER_last_cleanup_bytes, $min_cleanup_items * $data_length, 'bigger $min_cleanup_items';
+            } elsif ( $min_cleanup_bytes == 0 && $min_cleanup_items == 0 ) {
                 # all data have the same size
-                is $INSIDE_cleanings, 1, 'OK cleanings';
-                is $AFTER_last_advance_cleanup_bytes, 0, 'data cleaned for new data only';
+                ok $INSIDE_cleanings >= 0, 'OK cleaning and insert';
+                is $AFTER_last_cleanup_bytes, $data_length * $INSIDE_cleanings, 'data cleaned for new data';
             }
 
             last;
@@ -191,8 +190,8 @@ sub test_insert {
                 pass "expected used memory = $expected_used_memory, used memory = $BEFORE_used_memory -> $AFTER_used_memory";
                 is $AFTER_info->{last_removed_time}, $BEFORE_info->{last_removed_time}, 'last_removed_time not changed';
                 is $AFTER_info->{last_removed_time}, 0, 'no clearing (last_removed_time)';
-                is $AFTER_last_advance_cleanup_bytes, $BEFORE_last_advance_cleanup_bytes, 'last_advance_cleanup_bytes not changed';
-                is $AFTER_last_advance_cleanup_bytes, 0, 'no clearing (last_advance_cleanup_bytes)';
+                is $AFTER_last_cleanup_bytes, $BEFORE_last_cleanup_bytes, 'last_cleanup_bytes not changed';
+                is $AFTER_last_cleanup_bytes, 0, 'no clearing (last_cleanup_bytes)';
                 is $AFTER_info->{items}, $BEFORE_info->{items} + 1, "item added ($inserts)";
                 is $AFTER_info->{items}, $inserts, 'inserts OK';
                 pass "added $total_bytes_added bytes from $MAX_DATA_BYTES_AVAILABLE available";
@@ -206,22 +205,28 @@ sub test_insert {
     my $data_id = $data_time;
 
     my ( undef, $INSIDE_cleanings, $INSIDE_used_memory, $INSIDE_bytes_deleted ) = $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
-    my $expected_used_memory = $INSIDE_used_memory + ( $advance_cleanup_bytes == 0 && $advance_cleanup_num == 0 ) ? 0 : $data_length;
+    my $expected_used_memory = $INSIDE_used_memory + ( $min_cleanup_bytes == 0 && $min_cleanup_items == 0 ) ? 0 : $data_length;
 
     my $new_AFTER_used_memory = get_used_memory();
     my $new_AFTER_info = $COLLECTION->collection_info;
-    my $new_AFTER_last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
+    my $new_AFTER_last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
 
     pass "expected used memory = $expected_used_memory, used memory = $AFTER_used_memory -> $new_AFTER_used_memory";
-    if ( $advance_cleanup_bytes == 0 && $advance_cleanup_num == 0 ) {
-        is $INSIDE_cleanings, 1, 'cleaning';
-        ok $new_AFTER_info->{last_removed_time} > $AFTER_info->{last_removed_time}, 'last_removed_time not changed';
-        is $new_AFTER_last_advance_cleanup_bytes, 0, 'no last_advance_cleanup_bytes';
-        is $new_AFTER_info->{items}, $AFTER_info->{items}, 'items not added';
+    if ( $min_cleanup_bytes == 0 && $min_cleanup_items == 0 ) {
+        ok $INSIDE_cleanings >= 0, 'maybe cleaning';
+        if ( $INSIDE_cleanings ) {
+            ok $new_AFTER_info->{last_removed_time} > $AFTER_info->{last_removed_time}, 'last_removed_time changed';
+            is $new_AFTER_info->{items}, $AFTER_info->{items} - $INSIDE_cleanings + 1, 'item deleted and added';
+            is $new_AFTER_last_cleanup_bytes, $INSIDE_cleanings * $data_length, 'last_cleanup_bytes';
+        } else {
+            ok $new_AFTER_info->{last_removed_time} >= $AFTER_info->{last_removed_time}, 'last_removed_time changed';
+            ok $new_AFTER_info->{items} >= $AFTER_info->{items}, 'item deleted and added';
+            ok $new_AFTER_last_cleanup_bytes <= $AFTER_last_cleanup_bytes, 'last_cleanup_bytes';
+        }
     } else {
         is $INSIDE_cleanings, 0, 'no cleanings';
         is $new_AFTER_info->{last_removed_time}, $AFTER_info->{last_removed_time}, 'last_removed_time not changed';
-        is $new_AFTER_last_advance_cleanup_bytes, $AFTER_last_advance_cleanup_bytes - $data_length, 'last_advance_cleanup_bytes changed by data length';
+        is $new_AFTER_last_cleanup_bytes, $AFTER_last_cleanup_bytes, 'last_cleanup_bytes changed by data length';
         is $new_AFTER_info->{items}, $AFTER_info->{items} + 1, 'item added ones';
     }
     ok $expected_used_memory <= $MAX_DATA_BYTES_AVAILABLE, 'no excess data';
@@ -239,8 +244,8 @@ sub get_used_memory {
 sub new_connection {
     my %args = @_;
 
-    my $advance_cleanup_bytes   = $args{advance_cleanup_bytes};
-    my $advance_cleanup_num     = $args{advance_cleanup_num};
+    my $min_cleanup_bytes   = $args{min_cleanup_bytes};
+    my $min_cleanup_items   = $args{min_cleanup_items};
 
     if ( $REDIS_SERVER ) {
         $REDIS_SERVER->stop;
@@ -259,18 +264,16 @@ sub new_connection {
     isa_ok( $REDIS_SERVER, 'Test::RedisServer' );
 
     $COLLECTION = Redis::CappedCollection->create(
-        redis                   => $REDIS_SERVER,
-        name                    => $uuid->create_str,
-        'older_allowed'         => 1,
-        'advance_cleanup_bytes' => $advance_cleanup_bytes,
-        'advance_cleanup_num'   => $advance_cleanup_num,
+        redis               => $REDIS_SERVER,
+        name                => $uuid->create_str,
+        'older_allowed'     => 1,
+        'min_cleanup_bytes' => $min_cleanup_bytes,
+        'min_cleanup_items' => $min_cleanup_items,
     );
     isa_ok( $COLLECTION, 'Redis::CappedCollection' );
 
     $REDIS = $COLLECTION->_redis;
     isa_ok( $REDIS, 'Redis' );
-#    $REDIS->config_set( maxmemory => $MAXMEMORY );
-#    $REDIS->config_set( 'maxmemory-policy' => 'noeviction' );
 
     $STATUS_KEY = "$NAMESPACE:S:".$COLLECTION->name;
     ok $COLLECTION->_call_redis( 'EXISTS', $STATUS_KEY ), 'status hash created';

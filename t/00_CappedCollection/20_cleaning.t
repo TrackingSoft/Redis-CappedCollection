@@ -51,6 +51,7 @@ use Redis::CappedCollection qw(
     $E_MAXMEMORY_LIMIT
     $E_NONEXISTENT_DATA_ID
     $E_REDIS
+    $MIN_MEMORY_RESERVE
     $NAMESPACE
 );
 use Redis::CappedCollection::Test::Utils qw(
@@ -61,8 +62,8 @@ use Redis::CappedCollection::Test::Utils qw(
 # -- Global variables
 my $uuid = new Data::UUID;
 my (
-    $ADVANCE_CLEANUP_BYTES,
-    $ADVANCE_CLEANUP_NUM,
+    $MIN_CLEANUP_BYTES,
+    $MIN_CLEANUP_ITEMS,
     $COLLECTION,
     $COLLECTION_NAME,
     $ERROR_MSG,
@@ -91,8 +92,9 @@ SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
+    $MEMORY_RESERVE_COEFFICIENT = 1 + $MIN_MEMORY_RESERVE;
 sub new_connection {
-    my ( $name, $maxmemory, $advance_cleanup_bytes, $advance_cleanup_num, $memory_reserve ) = @_;
+    my ( $name, $maxmemory, $min_cleanup_bytes, $min_cleanup_items, $memory_reserve ) = @_;
 
     if ( $REDIS_SERVER ) {
         $REDIS_SERVER->stop;
@@ -116,15 +118,16 @@ sub new_connection {
         name                    => $uuid->create_str,
         'older_allowed'         => 1,
         $name                   ? ( name                    => $name )                  : (),
-        $advance_cleanup_bytes  ? ( 'advance_cleanup_bytes' => $advance_cleanup_bytes ) : (),
-        $advance_cleanup_num    ? ( 'advance_cleanup_num'   => $advance_cleanup_num   ) : (),
+        $min_cleanup_bytes      ? ( 'min_cleanup_bytes'     => $min_cleanup_bytes )     : (),
+        $min_cleanup_items      ? ( 'min_cleanup_items'     => $min_cleanup_items   )     : (),
         $memory_reserve         ? ( memory_reserve          => $memory_reserve )        : (),
     );
     isa_ok( $COLLECTION, 'Redis::CappedCollection' );
     $COLLECTION_NAME        = $COLLECTION->name;
-    $ADVANCE_CLEANUP_BYTES  = $COLLECTION->advance_cleanup_bytes;
-    $ADVANCE_CLEANUP_NUM    = $COLLECTION->advance_cleanup_num;
+    $MIN_CLEANUP_BYTES      = $COLLECTION->min_cleanup_bytes;
+    $MIN_CLEANUP_ITEMS      = $COLLECTION->min_cleanup_items;
     $MEMORY_RESERVE         = $COLLECTION->memory_reserve;
+    $MAXMEMORY              = $maxmemory;
 
     $REDIS = $COLLECTION->_redis;
     isa_ok( $REDIS, 'Redis' );
@@ -180,51 +183,33 @@ sub verifying {
         );
 
         foreach my $step ( @{ $debug_records->{ $tested_function }->{ $operation_id } } ) {
-            if ( $step->{_STEP} eq 'Cleaning needed or not?' ) {
-                $enough_memory_cleaning_needed = $step->{enough_memory_cleaning_needed};
-            } elsif ( $step->{_STEP} eq 'Before cleanings' ) {
+            if ( $step->{_STEP} eq 'Before cleanings' ) {
                 $exists_before_cleanings = 1;
                 $calculated_cleaning_needed =
                        $step->{coll_items} > 0
                     && (
-                        (
-                            (
-                                   $step->{is_forced_cleaning}
-                                && $step->{enough_memory_cleaning_needed} > 0
-                             )
-                            || (
-                                   $step->{LAST_REDIS_USED_MEMORY} * $step->{MEMORY_RESERVE_COEFFICIENT} >= $step->{MAXMEMORY}
-                                || $step->{enough_memory_cleaning_needed} > 0
-                            )
-                        )
+                           $step->{min_cleanup_items} > 0
+                        || $step->{min_cleanup_bytes} > 0
                         || (
-                               $step->{advance_remaining_iterations} > 0
-                            || (
-                                   $step->{advance_cleanup_bytes} > 0
-                                && $step->{advance_bytes_deleted} < $step->{advance_cleanup_bytes}
-                            )
+                               $step->{min_cleanup_items} == 0
+                            && $step->{min_cleanup_bytes} == 0
                         )
-                        || $step->{enough_memory_cleaning_needed} > 0
-                    );
+                    )
+                ;
+                ok $exists_before_cleanings && $calculated_cleaning_needed, 'Before cleanings';
             } elsif ( $step->{_STEP} eq 'Before real cleaning' ) {
-                ok $step->{excess_data_id} eq shift( @operation_times ), 'excess data time OK';
+                ok $step->{to_delete_data_id} eq shift( @operation_times ), 'to_delete data time OK';
             } elsif ( $step->{_STEP} eq 'After real cleaning' ) {
-                ok !$COLLECTION->_call_redis( 'HEXISTS', $step->{excess_data_key}, $step->{excess_data_id} ), 'excess data deleted';
+                ok !$COLLECTION->_call_redis( 'HEXISTS', $step->{to_delete_data_key}, $step->{to_delete_data_id} ), 'to_delete data deleted';
                 $cleaning_performed = 1;
                 ++$cleanings_performed;
                 ++$items_deleted;
             } elsif ( $step->{_STEP} eq 'Cleaning finished' ) {
-                ok $step->{total_items_deleted} == $items_deleted,                      'total items deleted OK';
-                ok $step->{advance_remaining_iterations} <= 0,                          'advance remaining iterations OK';
-                ok $step->{is_advance_cleanup_bytes_worked_out} == 1,                   'advance cleanup bytes worked out';
-                ok $step->{is_enough_memory} == 1,                                      'enough_memory';
-                ok $step->{is_memory_cleared} == 1,                                     'memory_cleared';
-                ok $step->{total_bytes_deleted} > $step->{advance_cleanup_bytes},       'total bytes deleted OK';
+                ok $step->{items_deleted} == $items_deleted,            'items deleted OK';
+                ok $step->{bytes_deleted} > $step->{min_cleanup_bytes}, 'bytes deleted OK';
             }
 
-            $LAST_REDIS_USED_MEMORY     = $step->{LAST_REDIS_USED_MEMORY};
-            $MEMORY_RESERVE_COEFFICIENT = $step->{MEMORY_RESERVE_COEFFICIENT};
-            $MAXMEMORY                  = $step->{MAXMEMORY};
+            $LAST_REDIS_USED_MEMORY     = $step->{REDIS_USED_MEMORY};
         }
 
         if ( $cleaning_performed ) {
@@ -234,9 +219,13 @@ sub verifying {
             ok !$exists_before_cleanings || !$calculated_cleaning_needed, 'not exists before cleanings';
         }
     }
-    ok $cleanings_performed, 'cleanings performed';
+    if ( $tested_function eq 'insert') {
+        ok $cleanings_performed, 'cleanings performed';
+    } else {
+        diag 'cleanings on update present' if $cleanings_performed;
+    }
     pass sprintf( 'expected: %.2f * %.2f (%.2f) < %.2f', $LAST_REDIS_USED_MEMORY, $MEMORY_RESERVE_COEFFICIENT, $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT, $MAXMEMORY );
-# NOTE: $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT near by $MAXMEMORY according advance_cleanup_bytes and advance_cleanup_num';
+# NOTE: $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT near by $MAXMEMORY according min_cleanup_bytes and min_cleanup_items';
 #    ok $LAST_REDIS_USED_MEMORY * $MEMORY_RESERVE_COEFFICIENT > $MAXMEMORY, 'cleaning OK';
 }
 
@@ -244,15 +233,15 @@ sub verifying {
 
 my $prev_time = 0;
 my $time_grows = 0;
-foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
-    foreach my $current_advance_cleanup_num ( 0, 100, 10_000 ) {
+foreach my $current_min_cleanup_bytes ( 0, 100, 10_000 ) {
+    foreach my $current_min_cleanup_items ( 0, 100, 10_000 ) {
         new_connection(
             undef,      # name
 #TODO:
 #            0,          # maxmemory
             1_000_000,  # maxmemory
-            $current_advance_cleanup_bytes,
-            $current_advance_cleanup_num,
+            $current_min_cleanup_bytes,
+            $current_min_cleanup_items,
         );
 
         $stuff = '*' x 1_000;
@@ -268,8 +257,8 @@ foreach my $current_advance_cleanup_bytes ( 0, 100, 10_000 ) {
             $COLLECTION->_DEBUG( $data_time );
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
-        my $last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
-        ok $last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($last_advance_cleanup_bytes)";
+        my $last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
+        ok $last_cleanup_bytes, "last_cleanup_bytes calculated ($last_cleanup_bytes)";
         $last_removed_time = $COLLECTION->collection_info->{last_removed_time};
         ok $last_removed_time > 0, 'OK last_removed_time after';
         ok $last_removed_time >= $prev_time, 'OK last_removed_time';
@@ -283,15 +272,15 @@ ok $time_grows, 'last_removed_time grows';
 #-- Update ---------------------------------------------------------------------
 
 $MAXMEMORY = 2_000_000;
-foreach my $current_advance_cleanup_bytes ( 0, 100 ) {
-    foreach my $current_advance_cleanup_num ( 0, 100, 10_000 ) {
+foreach my $current_min_cleanup_bytes ( 0, 100 ) {
+    foreach my $current_min_cleanup_items ( 0, 100, 10_000 ) {
         new_connection(
             undef,      # name
 #TODO:
 #            0,          # maxmemory
             $MAXMEMORY, # maxmemory
-            $current_advance_cleanup_bytes,
-            $current_advance_cleanup_num,
+            $current_min_cleanup_bytes,
+            $current_min_cleanup_items,
         );
 
         @operation_times = ();
@@ -310,30 +299,31 @@ foreach my $current_advance_cleanup_bytes ( 0, 100 ) {
             $COLLECTION->insert( $list_id, $data_id, $stuff, $data_time );
         }
         verifying( 'insert' );
-        my $last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
-        ok $last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($last_advance_cleanup_bytes)";
+        my $last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
+        ok $last_cleanup_bytes, "last_cleanup_bytes calculated ($last_cleanup_bytes)";
 
         $COLLECTION->_DEBUG( Time::HiRes::time );
         my $data_id  = $operation_times[ -100 ];    # cause $data_id == $data_time
         $list_id = $data_lists{ $data_id };
-        $stuff = '@' x 100_000;
+        $stuff = '@' x int( $last_cleanup_bytes / 2 );
         $COLLECTION->update( $list_id, $data_id, $stuff );
-        my $new_last_advance_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_advance_cleanup_bytes'  );
-        ok $new_last_advance_cleanup_bytes, "last_advance_cleanup_bytes calculated ($new_last_advance_cleanup_bytes)";
-        ok $new_last_advance_cleanup_bytes != $last_advance_cleanup_bytes, 'last_advance_cleanup_bytes re-calculated';
+        my $new_last_cleanup_bytes = $COLLECTION->_call_redis( "HGET", $STATUS_KEY, 'last_cleanup_bytes'  );
+        ok $new_last_cleanup_bytes, "last_cleanup_bytes calculated ($new_last_cleanup_bytes)";
+        ok $new_last_cleanup_bytes != $last_cleanup_bytes, 'last_cleanup_bytes re-calculated';
         verifying( 'update' );
 
         #-- cleaning himself
-        $data_id = $operation_times[0];
-        $list_id = $data_lists{ $data_id };
-        $COLLECTION->_DEBUG( Time::HiRes::time );
-        eval { $COLLECTION->update( $list_id, $data_id, $stuff ) };
-        my $error = $@;
-        ok $error, 'exception';
-        is $COLLECTION->last_errorcode, $E_REDIS, 'E_REDIS';
-        my $error_msg = $Redis::CappedCollection::ERROR{ $E_MAXMEMORY_LIMIT };
-        like( $error, qr/$error_msg/, 'E_MAXMEMORY_LIMIT' );
-        note '$@: ', $error;
+        for ( my $i = 0; $i < scalar( @operation_times ); $i++ ) {
+            $data_id = $operation_times[ $i ];
+            $list_id = $data_lists{ $data_id };
+            unless ( defined $COLLECTION->receive( $list_id, $data_id ) ) {
+                $COLLECTION->_DEBUG( Time::HiRes::time );
+                eval { $COLLECTION->update( $list_id, $data_id, $stuff ) };
+                my $error = $@;
+                ok !$error, 'no exception';
+                break;
+            }
+        }
 
         #-- $E_NONEXISTENT_DATA_ID
         $data_id = 99999999;

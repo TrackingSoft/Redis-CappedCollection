@@ -71,7 +71,7 @@ my $msg = "attribute is set correctly";
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
-    advance_cleanup_num => 0,
+    min_cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -116,7 +116,7 @@ controlled_call( $method, "ID", ++$data_id, "Stuff" );
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
-    advance_cleanup_num => 0,
+    min_cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -199,7 +199,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
-    advance_cleanup_num => 0,
+    min_cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -223,7 +223,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
-    advance_cleanup_num => 0,
+    min_cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -254,7 +254,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
-    advance_cleanup_num => 0,
+    min_cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 

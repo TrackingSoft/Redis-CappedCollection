@@ -31,15 +31,12 @@ BEGIN {
 
 use bytes;
 use Data::UUID;
-use Params::Util qw(
-    _NUMBER
-);
+use Time::HiRes     qw( gettimeofday );
 use Redis::CappedCollection qw(
     $DEFAULT_SERVER
     $DEFAULT_PORT
     $NAMESPACE
-    $DEFAULT_ADVANCE_CLEANUP_NUM
-);
+    );
 
 use Redis::CappedCollection::Test::Utils qw(
     get_redis
@@ -58,11 +55,9 @@ SKIP: {
 # For Test::RedisServer
 isa_ok( $redis, 'Test::RedisServer' );
 
-my ( $coll, $name, $tmp, $status_key, $queue_key, $advance_cleanup_bytes, $advance_cleanup_num, $maxmemory, @arr, $info );
+my ( $coll, $name, $tmp, $status_key, $queue_key, $min_cleanup_bytes, $maxmemory, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
-
-my $data_id = 0;
 
 sub new_connect {
     # For Test::RedisServer
@@ -72,20 +67,17 @@ sub new_connect {
         {
             port                => $port,
             maxmemory           => $maxmemory,
+#            "vm-enabled"        => 'no',
             "maxmemory-policy"  => 'noeviction',
             "maxmemory-samples" => 100,
         } );
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
-    $data_id = 0;
-
     $coll = Redis::CappedCollection->create(
         redis   => $redis,
         name    => $uuid->create_str,
-        'older_allowed' => 1,
-        $advance_cleanup_bytes ? ( 'advance_cleanup_bytes' => $advance_cleanup_bytes ) : (),
-        $advance_cleanup_num   ? ( 'advance_cleanup_num'   => $advance_cleanup_num   ) : (),
+        $min_cleanup_bytes ? ( 'min_cleanup_bytes' => $min_cleanup_bytes ) : (),
         );
     isa_ok( $coll, 'Redis::CappedCollection' );
 
@@ -97,63 +89,58 @@ sub new_connect {
     ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 }
 
-$advance_cleanup_num = 0;
+$min_cleanup_bytes = 0;
 $maxmemory = 0;
 new_connect();
-is $coll->advance_cleanup_num, $DEFAULT_ADVANCE_CLEANUP_NUM, $msg;
+is $coll->min_cleanup_bytes, 0, $msg;
 $coll->drop_collection;
 
-$advance_cleanup_num = 5;
+$min_cleanup_bytes = 50_000;
 new_connect();
-is $coll->advance_cleanup_num, $advance_cleanup_num, $msg;
-$coll->drop_collection;
+is $coll->min_cleanup_bytes, $min_cleanup_bytes, $msg;
 
-$advance_cleanup_bytes = 0;
-$maxmemory = 0;
-new_connect();
-is $coll->advance_cleanup_bytes, 0, $msg;
-$coll->drop_collection;
-
-$advance_cleanup_bytes = 50_000;
-new_connect();
-is $coll->advance_cleanup_bytes, $advance_cleanup_bytes, $msg;
+my $data_id = 0;
 
 $coll->insert( 'List id', $data_id++, '*' x 10_000 ) for 1..10;
-
-$coll->resize( advance_cleanup_num => 3 );
-
 $name = 'TEST';
 $tmp = $data_id;
 $coll->insert( $name, $data_id++, '*' );
-$info = $coll->collection_info;
-is $info->{items}, 11, "correct value";
-ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
-
 $coll->insert( $name, $data_id++, '*' x 10_000 );
-$info = $coll->collection_info;
-is $info->{items}, 12, "correct value";
-ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
 $coll->update( $name, $tmp, '*' x 10_000 );
-$info = $coll->collection_info;
-ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 
-$coll->insert( $name, $data_id++, '*' x 10_000 );
-$info = $coll->collection_info;
-ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
+$coll->insert( $name, $data_id++, '*' x 10_000 ) for 1..4;
 
-$coll->resize( advance_cleanup_num => 6 );
+dies_ok { $coll->min_cleanup_bytes( -1 ) } "expecting to die: min_cleanup_bytes is negative";
 
 $coll->drop_collection;
 
+$min_cleanup_bytes = 0;
 new_connect();
+$tmp = 'A';
+$data_id = 0;
+$coll->insert( $name, $data_id++, $tmp++, gettimeofday + 0 ) for 1..10;
+@arr = $coll->receive( $name );
+is "@arr", "A B C D E F G H I J", "correct value";
+$coll->insert( $name, $data_id++, $tmp++, gettimeofday + 0 );
+@arr = $coll->receive( $name );
+is "@arr", "A B C D E F G H I J K", "correct value";
 
 foreach my $arg ( ( undef, 0.5, -1, -3, "", "0.5", \"scalar", [], $uuid ) )
 {
     dies_ok { $coll = Redis::CappedCollection->create(
         redis               => $redis,
         name                => $uuid->create_str,
-        advance_cleanup_num => $arg,
+        min_cleanup_bytes   => $arg,
+        ) } "expecting to die: ".( $arg || '' );
+}
+
+foreach my $arg ( ( undef, 0.04, 0.6, -1, -3, "", "0.6", \"scalar", [], $uuid ) )
+{
+    dies_ok { $coll = Redis::CappedCollection->create(
+        redis           => $redis,
+        name            => $uuid->create_str,
+        memory_reserve  => $arg,
         ) } "expecting to die: ".( $arg || '' );
 }
 

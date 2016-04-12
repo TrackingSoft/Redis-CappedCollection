@@ -35,7 +35,7 @@ our @EXPORT_OK  = qw(
     $NAMESPACE
     $MIN_MEMORY_RESERVE
     $MAX_MEMORY_RESERVE
-    $DEFAULT_ADVANCE_CLEANUP_NUM
+    $DEFAULT_MIN_CLEANUP_ITEMS
 
     $E_NO_ERROR
     $E_MISMATCH_ARG
@@ -238,15 +238,16 @@ const our $MIN_MEMORY_RESERVE   => 0.05;    # 5% memory reserve coefficient
 const our $MAX_MEMORY_RESERVE   => 0.5;     # 50% memory reserve coefficient
 
 
-=head3 $DEFAULT_ADVANCE_CLEANUP_NUM
+=head3 $DEFAULT_MIN_CLEANUP_ITEMS
 
 Number of additional elements to delete from collection during cleanup procedure when collection size
 exceeds 'maxmemory'.
 
-Default 100 elements. 0 means unlimited iterations - cleanup until memory reserve requirement is met.
+Default 100 elements. 0 means no minimal cleanup required,
+so memory cleanup will be performed only to free up sufficient amount of memory.
 
 =cut
-const our $DEFAULT_ADVANCE_CLEANUP_NUM  => 100;
+const our $DEFAULT_MIN_CLEANUP_ITEMS    => 100;
 
 =head3 $DATA_VERSION
 
@@ -421,12 +422,19 @@ const my $USED_MEMORY_POLICY        => 'noeviction';
 const my $_LISTS                        => 'lists';
 const my $_ITEMS                        => 'items';
 const my $_OLDER_ALLOWED                => 'older_allowed';
-const my $_ADVANCE_CLEANUP_BYTES        => 'advance_cleanup_bytes';
-const my $_ADVANCE_CLEANUP_NUM          => 'advance_cleanup_num';
+const my $_MIN_CLEANUP_BYTES            => 'min_cleanup_bytes';
+const my $_MIN_CLEANUP_ITEMS            => 'min_cleanup_items';
 const my $_MEMORY_RESERVE               => 'memory_reserve';
 const my $_DATA_VERSION                 => 'data_version';
 const my $_LAST_REMOVED_TIME            => 'last_removed_time';
-const my $_LAST_ADVANCE_CLEANUP_BYTES   => 'last_advance_cleanup_bytes';
+const my $_LAST_CLEANUP_BYTES           => 'last_cleanup_bytes';
+# information fields
+const my $_LAST_CLEANUP_ITEMS                   => 'last_cleanup_items';
+const my $_LAST_CLEANUP_MAXMEMORY               => 'last_cleanup_maxmemory';
+const my $_LAST_CLEANUP_USED_MEMORY             => 'last_cleanup_used_memory';
+const my $_LAST_CLEANUP_BYTES_MUST_BE_DELETED   => 'last_bytes_must_be_deleted';
+const my $_INSERTS_SINCE_CLEANING               => 'inserts_since_cleaning';
+const my $_UPDATES_SINCE_CLEANING               => 'updates_since_cleaning';
 
 my $_lua_namespace  = "local NAMESPACE  = '".$NAMESPACE."'";
 my $_lua_queue_key  = "local QUEUE_KEY  = NAMESPACE..':Q:'..coll_name";
@@ -468,10 +476,16 @@ return ret
 END_CLEAN_DATA
 
 my $_lua_cleaning = <<"END_CLEANING";
-local MEMORY_RESERVE, MEMORY_RESERVE_COEFFICIENT, MAXMEMORY
-local LAST_REDIS_USED_MEMORY = 0
-local ROLLBACK = {}
-local CLEANINGS = 0
+local REDIS_USED_MEMORY                     = 0
+local REDIS_MAXMEMORY                       = 0
+local ROLLBACK                              = {}
+local TOTAL_BYTES_DELETED                   = 0
+local LAST_CLEANUP_BYTES_MUST_BE_DELETED    = 0
+local LAST_CLEANUP_BYTES                    = 0
+local LAST_CLEANUP_ITEMS                    = 0
+local LAST_OPERATION                        = ''
+local INSERTS_SINCE_CLEANING                = 0
+local UPDATES_SINCE_CLEANING                = 0
 
 local _DEBUG, _DEBUG_ID, _FUNC_NAME
 
@@ -481,28 +495,11 @@ local table_merge = function ( t1, t2 )
     end
 end
 
-local FIRST_REDIS_USED_MEMORY = 0
-
-local get_memory_used = function ()
-    -- used_memory_lua included
-    local redis_used_memory = string.match(
-        redis.call( 'INFO', 'memory' ),
-        'used_memory:(%d+)'
-    )
-    LAST_REDIS_USED_MEMORY = tonumber( redis_used_memory )
-    if FIRST_REDIS_USED_MEMORY == 0 then
-        FIRST_REDIS_USED_MEMORY = LAST_REDIS_USED_MEMORY
-    end
-end
-
 local _debug_log = function ( values )
     table_merge( values, {
         _DEBUG_ID                   = _DEBUG_ID,
         _FUNC_NAME                  = _FUNC_NAME,
-        MAXMEMORY                   = MAXMEMORY,
-        MEMORY_RESERVE              = MEMORY_RESERVE,
-        MEMORY_RESERVE_COEFFICIENT  = MEMORY_RESERVE_COEFFICIENT,
-        LAST_REDIS_USED_MEMORY      = LAST_REDIS_USED_MEMORY,
+        REDIS_USED_MEMORY           = REDIS_USED_MEMORY,
         list_id                     = list_id,
         data_id                     = data_id,
         data_len                    = #data,
@@ -512,30 +509,48 @@ local _debug_log = function ( values )
     redis.log( redis.LOG_NOTICE, _FUNC_NAME..': '..cjson.encode( values ) )
 end
 
-local _debug_switch = function ( argv_idx, func_name )
-    if MEMORY_RESERVE == nil then   -- the first call
-        MAXMEMORY       = tonumber( redis.call( 'CONFIG', 'GET', 'maxmemory' )[2] )
-        MEMORY_RESERVE  = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MEMORY_RESERVE' ) )
-        if MAXMEMORY == 0 then
-            MEMORY_RESERVE_COEFFICIENT = 0
-        else
-            MEMORY_RESERVE_COEFFICIENT = 1 + MEMORY_RESERVE
-        end
+local _setup = function ( argv_idx, func_name, extra_data_len )
+    LAST_OPERATION = func_name
+
+    REDIS_MAXMEMORY = tonumber( redis.call( 'CONFIG', 'GET', 'maxmemory' )[2] )
+    local memory_reserve_coefficient = 1 + tonumber( redis.call( 'HGET', STATUS_KEY, '$_MEMORY_RESERVE' ) )
+
+    local redis_used_memory = string.match(
+        redis.call( 'INFO', 'memory' ),
+        'used_memory:(%d+)'
+    )
+    REDIS_USED_MEMORY = tonumber( redis_used_memory )
+    LAST_CLEANUP_BYTES_MUST_BE_DELETED = REDIS_USED_MEMORY + extra_data_len - math.floor( REDIS_MAXMEMORY / memory_reserve_coefficient )
+    if LAST_CLEANUP_BYTES_MUST_BE_DELETED < 0 or REDIS_MAXMEMORY == 0 then
+        LAST_CLEANUP_BYTES_MUST_BE_DELETED = 0
     end
 
-    if argv_idx ~= nil then
-        _FUNC_NAME  = func_name
-        _DEBUG_ID   = tonumber( ARGV[ argv_idx ] )
-        if _DEBUG_ID ~= 0 then
-            _DEBUG = true
-            get_memory_used()
-            _debug_log( {
-                _STEP       = '_debug_switch',
-                argv_idx    = argv_idx
-            } )
-        else
-            _DEBUG = false
-        end
+    LAST_CLEANUP_BYTES = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_CLEANUP_BYTES' ) )
+    if LAST_CLEANUP_BYTES == nil then
+        LAST_CLEANUP_BYTES = 0
+    end
+
+    INSERTS_SINCE_CLEANING = tonumber( redis.call( 'HGET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING' ) )
+    if INSERTS_SINCE_CLEANING == nil then
+        INSERTS_SINCE_CLEANING = 0
+    end
+    UPDATES_SINCE_CLEANING = tonumber( redis.call( 'HGET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING' ) )
+    if UPDATES_SINCE_CLEANING == nil then
+        UPDATES_SINCE_CLEANING = 0
+    end
+
+    _FUNC_NAME  = func_name
+    _DEBUG_ID   = tonumber( ARGV[ argv_idx ] )
+    if _DEBUG_ID ~= 0 then
+        _DEBUG = true
+        _debug_log( {
+            _STEP                   = '_setup',
+            maxmemory               = REDIS_MAXMEMORY,
+            redis_used_memory       = REDIS_USED_MEMORY,
+            bytes_must_be_deleted   = LAST_CLEANUP_BYTES_MUST_BE_DELETED
+        } )
+    else
+        _DEBUG = false
     end
 end
 
@@ -588,318 +603,186 @@ local table_tostring = function ( tbl )
     return "{" .. table.concat( result, "," ) .. "}"
 end
 
-local is_not_enough_memory = function ( extra_data_len )
-    if _DEBUG then
-        _debug_log( { _STEP = 'is_not_enough_memory started' } )
-    end
-
-    if MEMORY_RESERVE_COEFFICIENT == 0 then
-        return 0
-    end
-
-    if _DEBUG then
-        _debug_log( { _STEP = 'is_not_enough_memory analysed' } )
-    end
-
-    if LAST_REDIS_USED_MEMORY + extra_data_len > math.floor( MAXMEMORY / MEMORY_RESERVE_COEFFICIENT ) then
-        if _DEBUG then
-            _debug_log( {
-                _STEP       = 'is_not_enough_memory'
-            } )
-        end
-
-        return 1
-    else
-        return 0
-    end
-end
-
-local BYTES_DELETED = 0
-
 -- deleting old data to make room for new data
-local cleaning = function ( list_id, data_id, extra_data_len, is_forced_cleaning )
-    local memory_reserve
-    local enough_memory_cleaning_needed = 0
+local cleaning = function ( list_id, data_id, is_cleaning_needed )
+    local coll_items = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ITEMS' ) )
 
-    get_memory_used()
-    if is_forced_cleaning == 1 then
-        enough_memory_cleaning_needed = 1
-    else
-        enough_memory_cleaning_needed = is_not_enough_memory( extra_data_len )
+    if coll_items == 0 then
+        return
+    end
+
+    local min_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MIN_CLEANUP_BYTES' ) )
+    local min_cleanup_items = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MIN_CLEANUP_ITEMS' ) )
+
+    local cleanup_bytes = math.max( min_cleanup_bytes, LAST_CLEANUP_BYTES_MUST_BE_DELETED )
+
+    if not ( is_cleaning_needed or LAST_CLEANUP_BYTES_MUST_BE_DELETED > 0 ) then
+        return
     end
 
     if _DEBUG then
         _debug_log( {
-            _STEP                           = 'Cleaning needed or not?',
-            is_forced_cleaning              = is_forced_cleaning,
-            enough_memory_cleaning_needed   = enough_memory_cleaning_needed
+            _STEP               = 'Before cleanings',
+            coll_items          = coll_items,
+            min_cleanup_items   = min_cleanup_items,
+            min_cleanup_bytes   = min_cleanup_bytes,
         } )
     end
 
-    if enough_memory_cleaning_needed == 1 then
-        local advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ADVANCE_CLEANUP_BYTES' ) )
-        local advance_cleanup_num   = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ADVANCE_CLEANUP_NUM' ) )
+    local items_deleted = 0
+    local bytes_deleted = 0
+    local lists_deleted = 0
 
-        -- how much data to delete obsolete data
-        local coll_items            = tonumber( redis.call( 'HGET', STATUS_KEY, '$_ITEMS' ) )
-        local advance_remaining_iterations = advance_cleanup_num
-        if advance_remaining_iterations > coll_items then
-            advance_remaining_iterations = coll_items
+    repeat
+        if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
+            -- Level 2 points the error to where the function that called error was called
+            error( 'Queue key does not exist', 2 )
         end
 
-        local total_items_deleted   = 0
-        local advance_items_deleted = 0
-        local lists_deleted         = 0
-        local advance_bytes_deleted = 0
-        local total_bytes_deleted   = 0
-        local cleaning_iteration    = 1
+        -- continue to work with the to_delete (requiring removal) data and for them using the prefix 'to_delete_'
+        local to_delete_list_id, last_removed_time = unpack( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' ) )
+        last_removed_time = tonumber( last_removed_time )
+        -- key data structures
+        local to_delete_data_key = DATA_KEYS..':'..to_delete_list_id
+        local to_delete_time_key = TIME_KEYS..':'..to_delete_list_id
 
-        if _DEBUG then
-            _debug_log( {
-                _STEP                           = 'Before cleanings',
-                is_forced_cleaning              = is_forced_cleaning,
-                coll_items                      = coll_items,
-                advance_cleanup_num             = advance_cleanup_num,
-                advance_remaining_iterations    = advance_remaining_iterations,
-                advance_cleanup_bytes           = advance_cleanup_bytes,
-                advance_bytes_deleted           = advance_bytes_deleted,
-                total_bytes_deleted             = total_bytes_deleted,
-                enough_memory_cleaning_needed   = enough_memory_cleaning_needed
-            } )
-        end
-
-        while
-                coll_items > 0
-            and (
-                   advance_remaining_iterations > 0
-                or ( advance_cleanup_bytes > 0 and advance_bytes_deleted < advance_cleanup_bytes )
-                or ( advance_cleanup_num == 0 and advance_cleanup_num == 0 and enough_memory_cleaning_needed == 1 )
-            )
-        do
-            if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
-                -- Level 2 points the error to where the function that called error was called
-                error( 'Queue key does not exist', 2 )
-            end
-
-            -- continue to work with the excess (requiring removal) data and for them using the prefix 'excess_'
-            local excess_list_id, very_oldest_time = unpack( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' ) )
-            very_oldest_time        = tonumber( very_oldest_time )
-            -- key data structures
-            local excess_data_key   = DATA_KEYS..':'..excess_list_id
-            local excess_time_key   = TIME_KEYS..':'..excess_list_id
-
-            -- looking for the oldest data
-            local excess_data_id
-            local excess_data
-            local items = redis.call( 'HLEN', excess_data_key )
--- #FIXME: excess_data -> excess_data_len
+        -- looking for the oldest data
+        local to_delete_data_id
+        local to_delete_data
+        local items = redis.call( 'HLEN', to_delete_data_key )
+-- #FIXME: to_delete_data -> to_delete_data_len
 -- HSTRLEN key field
 -- Available since 3.2.0.
-            if items == 1 then
-                excess_data_id, excess_data = unpack( redis.call( 'HGETALL', excess_data_key ) )
-            else
-                excess_data_id   = redis.call( 'ZRANGE', excess_time_key, 0, 0 )[1]
-                excess_data      = redis.call( 'HGET', excess_data_key, excess_data_id )
-            end
-            local excess_data_len = #excess_data
-            excess_data = nil   -- free memory
-
-            if _DEBUG then
-                _debug_log( {
-                    _STEP           = 'Before real cleaning',
-                    items           = items,
-                    excess_list_id  = excess_list_id,
-                    excess_data_id  = excess_data_id,
-                    excess_data_len = excess_data_len
-                } )
-            end
-
-            if excess_list_id == list_id and excess_data_id == data_id then
-                if cleaning_iteration == 1 then
-                    -- Its first attempt to clean the conflicting data, for which the primary operation executed.
-                    -- In this case, we are roll back operations that have been made before, and immediately return an error,
-                    -- shifting the handling of such errors on the client.
-                    cleaning_error( "$REDIS_MEMORY_ERROR_MSG" )
-                end
-                break
-            end
-
-            -- actually remove the oldest item
-            if _DEBUG then
-                local current_is_not_enough_memory                              = is_not_enough_memory( extra_data_len )
-                local advance_cleanup_bytes_yet_remains                         = advance_cleanup_bytes > 0 and advance_bytes_deleted < advance_cleanup_bytes
-
-                local because_is_forced_cleaning                                = is_forced_cleaning
-                local because_advance_cleanup_bytes                             = advance_cleanup_bytes_yet_remains
-
-                local because_is_not_enough_memory                              = current_is_not_enough_memory == 1
-                local because_advance_cleanup_num                               = advance_cleanup_num > 0
-                local is_advance_remaining_iterations_yet_remains               = advance_remaining_iterations > 0
-                local is_advance_remaining_iterations_truncated                 = advance_remaining_iterations < advance_cleanup_num
-                local is_not_enough_memory_worked_out                           = current_is_not_enough_memory == 0
-                local is_advance_remaining_iterations_worked_out                = advance_remaining_iterations <= 0
-                local is_advance_cleanup_bytes_worked_out                       = not advance_cleanup_bytes_yet_remains
-                local is_enough_memory_cleaning_before_advance_cleanup          =   total_items_deleted > 0
-                                                                                and advance_items_deleted == 0
-                                                                                and advance_bytes_deleted == 0
-                local is_advance_cleanup_worked_after_enough_memory_cleaning    =   advance_items_deleted > 0
-                                                                                and advance_bytes_deleted > 0
-                                                                                and total_bytes_deleted > advance_bytes_deleted
-
-                if because_advance_cleanup_bytes                            then because_advance_cleanup_bytes                          = 1 else because_advance_cleanup_bytes                          = 0 end
-                if because_is_not_enough_memory                             then because_is_not_enough_memory                           = 1 else because_is_not_enough_memory                           = 0 end
-                if because_advance_cleanup_num                              then because_advance_cleanup_num                            = 1 else because_advance_cleanup_num                            = 0 end
-                if is_advance_remaining_iterations_yet_remains              then is_advance_remaining_iterations_yet_remains            = 1 else is_advance_remaining_iterations_yet_remains            = 0 end
-                if is_advance_remaining_iterations_truncated                then is_advance_remaining_iterations_truncated              = 1 else is_advance_remaining_iterations_truncated              = 0 end
-                if is_not_enough_memory_worked_out                          then is_not_enough_memory_worked_out                        = 1 else is_not_enough_memory_worked_out                        = 0 end
-                if is_advance_remaining_iterations_worked_out               then is_advance_remaining_iterations_worked_out             = 1 else is_advance_remaining_iterations_worked_out             = 0 end
-                if is_advance_cleanup_bytes_worked_out                      then is_advance_cleanup_bytes_worked_out                    = 1 else is_advance_cleanup_bytes_worked_out                    = 0 end
-                if is_enough_memory_cleaning_before_advance_cleanup         then is_enough_memory_cleaning_before_advance_cleanup       = 1 else is_enough_memory_cleaning_before_advance_cleanup       = 0 end
-                if is_advance_cleanup_worked_after_enough_memory_cleaning   then is_advance_cleanup_worked_after_enough_memory_cleaning = 1 else is_advance_cleanup_worked_after_enough_memory_cleaning = 0 end
-
-                _debug_log( {
-                    _STEP                                                   = 'Why it is cleared?',
-                    coll_items                                              = coll_items,
-                    advance_cleanup_bytes                                   = advance_cleanup_bytes,
-                    advance_cleanup_num                                     = advance_cleanup_num,
-                    enough_memory_cleaning_needed                           = enough_memory_cleaning_needed,
-                    advance_remaining_iterations                            = advance_remaining_iterations,
-                    total_items_deleted                                     = total_items_deleted,
-                    advance_items_deleted                                   = advance_items_deleted,
-                    advance_bytes_deleted                                   = advance_bytes_deleted,
-                    total_bytes_deleted                                     = total_bytes_deleted,
-                    because_is_forced_cleaning                              = because_is_forced_cleaning,
-                    because_advance_cleanup_bytes                           = because_advance_cleanup_bytes,
-                    because_is_not_enough_memory                            = because_is_not_enough_memory,
-                    because_advance_cleanup_num                             = because_advance_cleanup_num,
-                    is_advance_remaining_iterations_yet_remains             = is_advance_remaining_iterations_yet_remains,
-                    is_advance_remaining_iterations_truncated               = is_advance_remaining_iterations_truncated,
-                    is_not_enough_memory_worked_out                         = is_not_enough_memory_worked_out,
-                    is_advance_remaining_iterations_worked_out              = is_advance_remaining_iterations_worked_out,
-                    is_advance_cleanup_bytes_worked_out                     = is_advance_cleanup_bytes_worked_out,
-                    is_enough_memory_cleaning_before_advance_cleanup        = is_enough_memory_cleaning_before_advance_cleanup,
-                    is_advance_cleanup_worked_after_enough_memory_cleaning  = is_advance_cleanup_worked_after_enough_memory_cleaning
-                } )
-            end
-            redis.call( 'HDEL', excess_data_key, excess_data_id )
-            items = items - 1
-            coll_items = coll_items - 1
-
-            redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', very_oldest_time )
-
-            if items > 0 then
-                -- If the list has more data
-                redis.call( 'ZREM', excess_time_key, excess_data_id )
-                local oldest_time = tonumber( redis.call( 'ZRANGE', excess_time_key, 0, 0, 'WITHSCORES' )[2] )
-                redis.call( 'ZADD', QUEUE_KEY, oldest_time, excess_list_id )
-
-                if items == 1 then
-                    redis.call( 'DEL', excess_time_key )
-                end
-            else
-                -- If the list does not have data
-                -- remove the name of the list from the queue collection
-                redis.call( 'ZREM', QUEUE_KEY, excess_list_id )
-                lists_deleted = lists_deleted + 1
-            end
-            get_memory_used()
-
-            -- amount of data collection decreased
-            total_items_deleted = total_items_deleted + 1
-            total_bytes_deleted = total_bytes_deleted + excess_data_len
-            if enough_memory_cleaning_needed == 0 then
-                advance_bytes_deleted               = advance_bytes_deleted + excess_data_len
-                advance_items_deleted               = advance_items_deleted + 1
-                if advance_cleanup_num > 0 then
-                    if advance_remaining_iterations > items then
-                        advance_remaining_iterations = items
-                    else
-                        advance_remaining_iterations = advance_remaining_iterations - 1
-                    end
-                end
-            end
-
-            if _DEBUG then
-                _debug_log( {
-                    _STEP                           = 'After real cleaning',
-                    excess_data_key                 = excess_data_key,
-                    excess_data_id                  = excess_data_id,
-                    coll_items                      = coll_items,
-                    items                           = items,
-                    total_items_deleted             = total_items_deleted,
-                    advance_items_deleted           = advance_items_deleted,
-                    advance_bytes_deleted           = advance_bytes_deleted,
-                    total_bytes_deleted             = total_bytes_deleted,
-                    advance_remaining_iterations    = advance_remaining_iterations,
-                    cleaning_iteration              = cleaning_iteration
-                } )
-            end
-
-            if enough_memory_cleaning_needed == 1 then
-                enough_memory_cleaning_needed = is_not_enough_memory( extra_data_len )
-            end
-
-            cleaning_iteration = cleaning_iteration + 1
-            CLEANINGS = CLEANINGS + 1
+        if items == 1 then
+            to_delete_data_id, to_delete_data = unpack( redis.call( 'HGETALL', to_delete_data_key ) )
+        else
+            to_delete_data_id = redis.call( 'ZRANGE', to_delete_time_key, 0, 0 )[1]
+            to_delete_data    = redis.call( 'HGET', to_delete_data_key, to_delete_data_id )
         end
-
-        if total_items_deleted ~= 0 then
-            -- reduce the number of items in the collection
-            redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -total_items_deleted )
-        end
-        if lists_deleted ~= 0 then
-            -- reduce the number of lists stored in a collection
-            redis.call( 'HINCRBY',  STATUS_KEY, '$_LISTS', -lists_deleted )
-        end
+        local to_delete_data_len = #to_delete_data
+        to_delete_data = nil    -- free memory
 
         if _DEBUG then
-            local is_enough_memory                          = is_not_enough_memory( extra_data_len ) == 0
-            local is_memory_cleared                         = total_bytes_deleted > 0 and total_bytes_deleted > 0
-            local is_advance_cleanup_bytes                  = advance_cleanup_bytes > 0
-            local is_advance_cleanup_bytes_worked_out       = advance_bytes_deleted >= advance_cleanup_bytes
-            local is_advance_cleanup_num                    = advance_cleanup_num > 0
-            local is_advance_cleanup_num_worked_out         = advance_items_deleted >= advance_cleanup_num
-
-            if is_enough_memory                             then is_enough_memory                           = 1 else is_enough_memory                           = 0 end
-            if is_memory_cleared                            then is_memory_cleared                          = 1 else is_memory_cleared                          = 0 end
-            if is_advance_cleanup_bytes                     then is_advance_cleanup_bytes                   = 1 else is_advance_cleanup_bytes                   = 0 end
-            if is_advance_cleanup_bytes_worked_out          then is_advance_cleanup_bytes_worked_out        = 1 else is_advance_cleanup_bytes_worked_out        = 0 end
-            if is_advance_cleanup_num                       then is_advance_cleanup_num                     = 1 else is_advance_cleanup_num                     = 0 end
-            if is_advance_cleanup_num_worked_out            then is_advance_cleanup_num_worked_out          = 1 else is_advance_cleanup_num_worked_out          = 0 end
-
             _debug_log( {
-                _STEP                                       = 'Cleaning finished',
-                cleaning_iteration                          = cleaning_iteration,
-                total_items_deleted                         = total_items_deleted,
-                advance_items_deleted                       = advance_items_deleted,
-                advance_bytes_deleted                       = advance_bytes_deleted,
-                total_bytes_deleted                         = total_bytes_deleted,
-                lists_deleted                               = lists_deleted,
-                enough_memory_cleaning_needed               = enough_memory_cleaning_needed,
-                advance_remaining_iterations                = advance_remaining_iterations,
-                advance_cleanup_bytes                       = advance_cleanup_bytes,
-                advance_cleanup_num                         = advance_cleanup_num,
-                advance_bytes_deleted                       = advance_bytes_deleted,
-                advance_items_deleted                       = advance_items_deleted,
-                coll_items                                  = coll_items,
-                is_forced_cleaning                          = is_forced_cleaning,
-                is_enough_memory                            = is_enough_memory,
-                is_memory_cleared                           = is_memory_cleared,
-                is_advance_cleanup_bytes                    = is_advance_cleanup_bytes,
-                is_advance_cleanup_bytes_worked_out         = is_advance_cleanup_bytes_worked_out,
-                is_advance_cleanup_num                      = is_advance_cleanup_num,
-                is_advance_cleanup_num_worked_out           = is_advance_cleanup_num_worked_out,
+                _STEP               = 'Before real cleaning',
+                items               = items,
+                to_delete_list_id   = to_delete_list_id,
+                to_delete_data_id   = to_delete_data_id,
+                to_delete_data_len  = to_delete_data_len
             } )
         end
 
-        if total_bytes_deleted > 0 then
-            redis.call( 'HINCRBY', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', total_bytes_deleted )
-            BYTES_DELETED = BYTES_DELETED + total_bytes_deleted
+        if to_delete_list_id == list_id and to_delete_data_id == data_id then
+            if items_deleted == 0 then
+                -- Its first attempt to clean the conflicting data, for which the primary operation executed.
+                -- In this case, we are roll back operations that have been made before, and immediately return an error,
+                -- shifting the handling of such errors on the client.
+                cleaning_error( "$REDIS_MEMORY_ERROR_MSG" )
+            end
+            break
         end
+
+        if _DEBUG then
+            _debug_log( {
+                _STEP               = 'Why it is cleared?',
+                coll_items          = coll_items,
+                min_cleanup_bytes   = min_cleanup_bytes,
+                min_cleanup_items   = min_cleanup_items,
+                items_deleted       = items_deleted,
+                bytes_deleted       = bytes_deleted,
+            } )
+        end
+
+        -- actually remove the oldest item
+        redis.call( 'HDEL', to_delete_data_key, to_delete_data_id )
+        items = items - 1
+        coll_items = coll_items - 1
+
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', last_removed_time )
+
+        if items > 0 then
+            -- If the list has more data
+            redis.call( 'ZREM', to_delete_time_key, to_delete_data_id )
+            local oldest_item_time = tonumber( redis.call( 'ZRANGE', to_delete_time_key, 0, 0, 'WITHSCORES' )[2] )
+            redis.call( 'ZADD', QUEUE_KEY, oldest_item_time, to_delete_list_id )
+
+            if items == 1 then
+                redis.call( 'DEL', to_delete_time_key )
+            end
+        else
+            -- If the list does not have data
+            -- remove the name of the list from the queue collection
+            redis.call( 'ZREM', QUEUE_KEY, to_delete_list_id )
+            lists_deleted = lists_deleted + 1
+        end
+
+        -- amount of data collection decreased
+        items_deleted = items_deleted + 1
+        bytes_deleted = bytes_deleted + to_delete_data_len
+
+        if _DEBUG then
+            _debug_log( {
+                _STEP               = 'After real cleaning',
+                to_delete_data_key  = to_delete_data_key,
+                to_delete_data_id   = to_delete_data_id,
+                items               = items,
+                items_deleted       = items_deleted,
+                bytes_deleted       = bytes_deleted,
+            } )
+        end
+
+    until
+            coll_items <= 0
+        or (
+               items_deleted >= min_cleanup_items
+            and bytes_deleted >= cleanup_bytes
+        )
+
+    if items_deleted > 0 then
+        -- reduce the number of items in the collection
+        redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -items_deleted )
+    end
+    if lists_deleted > 0 then
+        -- reduce the number of lists stored in a collection
+        redis.call( 'HINCRBY',  STATUS_KEY, '$_LISTS', -lists_deleted )
+    end
+
+    if _DEBUG then
+        _debug_log( {
+            _STEP               = 'Cleaning finished',
+            items_deleted       = items_deleted,
+            bytes_deleted       = bytes_deleted,
+            lists_deleted       = lists_deleted,
+            min_cleanup_bytes   = min_cleanup_bytes,
+            min_cleanup_items   = min_cleanup_items,
+            coll_items          = coll_items,
+        } )
+    end
+
+    if bytes_deleted > 0 then
+        if TOTAL_BYTES_DELETED == 0 then    -- first cleaning
+            LAST_CLEANUP_BYTES = bytes_deleted
+            redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
+            INSERTS_SINCE_CLEANING = 0
+            redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
+            UPDATES_SINCE_CLEANING = 0
+            redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
+        else
+            LAST_CLEANUP_BYTES = LAST_CLEANUP_BYTES + bytes_deleted
+            redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
+        end
+
+        TOTAL_BYTES_DELETED = TOTAL_BYTES_DELETED + bytes_deleted
+        LAST_CLEANUP_ITEMS = LAST_CLEANUP_ITEMS + items_deleted
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS', LAST_CLEANUP_ITEMS )
+
+        -- information values
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS', LAST_CLEANUP_ITEMS )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_MAXMEMORY', REDIS_MAXMEMORY )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_USED_MEMORY', REDIS_USED_MEMORY )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES_MUST_BE_DELETED', LAST_CLEANUP_BYTES_MUST_BE_DELETED )
     end
 end
-
-local last_advance_cleanup_bytes
 
 local call_with_error_control = function ( list_id, data_id, ... )
     local retries = $MAX_REMOVE_RETRIES
@@ -917,8 +800,7 @@ local call_with_error_control = function ( list_id, data_id, ... )
                 } )
             end
 
-            cleaning( list_id, data_id, 0, 1 )
-            last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
+            cleaning( list_id, data_id, true )
         else
             break
         end
@@ -978,16 +860,9 @@ end
 
 -- deleting obsolete data, if it is necessary
 $_lua_cleaning
-_debug_switch( 6, 'insert' )
-last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
-if last_advance_cleanup_bytes == nil then
-    last_advance_cleanup_bytes = 0
-end
 local data_len = #data
-if last_advance_cleanup_bytes < data_len then
-    cleaning( list_id, data_id, #data, 0 )
-    last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
-end
+_setup( 6, 'insert', data_len ) -- 6 -> is the index of ARGV[6]
+cleaning( list_id, data_id, false )
 
 -- add data to the list
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
@@ -1015,8 +890,8 @@ else
         table.insert( ROLLBACK, 1, { 'ZREM', TIME_KEY, existing_id } )
     end
     call_with_error_control( list_id, data_id, 'ZADD', TIME_KEY, data_time, data_id )
-    local oldest_time = redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2]
-    redis.call( 'ZADD', QUEUE_KEY, oldest_time, list_id )
+    local oldest_item_time = redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2]
+    redis.call( 'ZADD', QUEUE_KEY, oldest_item_time, list_id )
 end
 
 -- reflect the addition of new data
@@ -1025,13 +900,11 @@ if data_time < last_removed_time then
     redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', 0 )
 end
 
-local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - data_len
-if new_last_advance_cleanup_bytes < 0 then
-    new_last_advance_cleanup_bytes = 0
-end
-redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
+redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
+INSERTS_SINCE_CLEANING = INSERTS_SINCE_CLEANING + 1
+redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
 
-return { $E_NO_ERROR, CLEANINGS, FIRST_REDIS_USED_MEMORY, BYTES_DELETED }
+return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_INSERT
 
 $lua_script_body{update} = <<"END_UPDATE";
@@ -1060,12 +933,13 @@ if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 local extra_data_len
+local data_len = #data
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
 -- #FIXME: existed_data -> existed_data_len
 -- HSTRLEN key field
 -- Available since 3.2.0.
     local existed_data = redis.call( 'HGET', DATA_KEY, data_id )
-    extra_data_len = #data - #existed_data
+    extra_data_len = data_len - #existed_data
     existed_data = nil  -- free memory
 else
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
@@ -1080,15 +954,8 @@ end
 
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
-_debug_switch( 6, 'update' )
-last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
-if last_advance_cleanup_bytes == nil then
-    last_advance_cleanup_bytes = 0
-end
-if extra_data_len > 0 and last_advance_cleanup_bytes < extra_data_len then
-    cleaning( list_id, data_id, extra_data_len, 0 )
-    last_advance_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES' ) )
-end
+_setup( 6, 'update', extra_data_len )   -- 6 is the index of ARGV[6]
+cleaning( list_id, data_id, false )
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
@@ -1107,8 +974,8 @@ if new_data_time ~= 0 then
         redis.call( 'ZADD', QUEUE_KEY, new_data_time, list_id )
     else
         redis.call( 'ZADD', TIME_KEY, new_data_time, data_id )
-        local oldest_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
-        redis.call( 'ZADD', QUEUE_KEY, oldest_time, list_id )
+        local oldest_item_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
+        redis.call( 'ZADD', QUEUE_KEY, oldest_item_time, list_id )
     end
 
     if new_data_time < last_removed_time then
@@ -1116,13 +983,10 @@ if new_data_time ~= 0 then
     end
 end
 
-local new_last_advance_cleanup_bytes = last_advance_cleanup_bytes - extra_data_len
-if new_last_advance_cleanup_bytes < 0 then
-    new_last_advance_cleanup_bytes = 0
-end
-redis.call( 'HSET', STATUS_KEY, '$_LAST_ADVANCE_CLEANUP_BYTES', new_last_advance_cleanup_bytes )
+UPDATES_SINCE_CLEANING = UPDATES_SINCE_CLEANING + 1
+redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
 
-return { $E_NO_ERROR, CLEANINGS, FIRST_REDIS_USED_MEMORY, BYTES_DELETED }
+return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_UPDATE
 
 $lua_script_body{upsert} = <<"END_UPSERT";
@@ -1238,7 +1102,7 @@ if items == 1 then
 else
     data_id = redis.call( 'ZRANGE', TIME_KEY, 0, 0 )[1]
 end
-local very_oldest_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
+local last_removed_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
 
 -- get data
 
@@ -1250,7 +1114,7 @@ redis.call( 'HDEL', DATA_KEY, data_id )
 items = items - 1
 
 -- obtain information about the data that has become the oldest
-local oldest_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
+local oldest_item_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
 
 if items > 0 then
     -- If the list has more data
@@ -1258,7 +1122,7 @@ if items > 0 then
     -- delete the information about the time of the data
     redis.call( 'ZREM', TIME_KEY, data_id )
 
-    redis.call( 'ZADD', QUEUE_KEY, oldest_time, list_id )
+    redis.call( 'ZADD', QUEUE_KEY, oldest_item_time, list_id )
 
     if items == 1 then
         -- delete the list data structure 'zset'
@@ -1276,7 +1140,7 @@ else
 end
 
 redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -1 )
-redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', very_oldest_time )
+redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', last_removed_time )
 
 return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
@@ -1296,13 +1160,13 @@ if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
     return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
 end
 
-local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-local lists, items, older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
+local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
+local lists, items, older_allowed, min_cleanup_bytes, min_cleanup_items, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_LISTS',
         '$_ITEMS',
         '$_OLDER_ALLOWED',
-        '$_ADVANCE_CLEANUP_BYTES',
-        '$_ADVANCE_CLEANUP_NUM',
+        '$_MIN_CLEANUP_BYTES',
+        '$_MIN_CLEANUP_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION',
         '$_LAST_REMOVED_TIME'
@@ -1315,12 +1179,12 @@ return {
     lists,
     items,
     older_allowed,
-    advance_cleanup_bytes,
-    advance_cleanup_num,
+    min_cleanup_bytes,
+    min_cleanup_items,
     memory_reserve,
     data_version,
     last_removed_time,
-    oldest_time
+    oldest_item_time
 }
 END_COLLECTION_INFO
 
@@ -1339,8 +1203,8 @@ if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
     return { $E_COLLECTION_DELETED, false }
 end
 
-local oldest_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-return { $E_NO_ERROR, oldest_time }
+local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
+return { $E_NO_ERROR, oldest_item_time }
 END_OLDEST_TIME
 
 $lua_script_body{list_info} = <<"END_LIST_INFO";
@@ -1368,9 +1232,9 @@ end
 local items         = redis.call( 'HLEN', DATA_KEY )
 
 -- the second data
-local oldest_time   = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
+local oldest_item_time   = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
 
-return { $E_NO_ERROR, items, oldest_time }
+return { $E_NO_ERROR, items, oldest_item_time }
 END_LIST_INFO
 
 $lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
@@ -1465,11 +1329,11 @@ END_DROP_LIST
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
 -- creation of the collection and characterization of the collection by accessing existing collection
 
-local coll_name             = ARGV[1];
-local older_allowed         = ARGV[2];
-local advance_cleanup_bytes = ARGV[3];
-local advance_cleanup_num   = ARGV[4];
-local memory_reserve        = ARGV[5];
+local coll_name         = ARGV[1];
+local older_allowed     = ARGV[2];
+local min_cleanup_bytes = ARGV[3];
+local min_cleanup_items = ARGV[4];
+local memory_reserve    = ARGV[5];
 
 local data_version = '$DATA_VERSION'
 
@@ -1482,10 +1346,10 @@ local status_exist = redis.call( 'EXISTS', STATUS_KEY );
 
 if status_exist == 1 then
 -- if there is a collection
-    older_allowed, advance_cleanup_bytes, advance_cleanup_num, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
+    older_allowed, min_cleanup_bytes, min_cleanup_items, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_OLDER_ALLOWED',
-        '$_ADVANCE_CLEANUP_BYTES',
-        '$_ADVANCE_CLEANUP_NUM',
+        '$_MIN_CLEANUP_BYTES',
+        '$_MIN_CLEANUP_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION'
     ) );
@@ -1494,23 +1358,24 @@ if status_exist == 1 then
 else
 -- if you want to create a new collection
     redis.call( 'HMSET', STATUS_KEY,
-        '$_LISTS',                      0,
-        '$_ITEMS',                      0,
-        '$_OLDER_ALLOWED',              older_allowed,
-        '$_ADVANCE_CLEANUP_BYTES',      advance_cleanup_bytes,
-        '$_ADVANCE_CLEANUP_NUM',        advance_cleanup_num,
-        '$_MEMORY_RESERVE',             memory_reserve,
-        '$_DATA_VERSION',               data_version,
-        '$_LAST_REMOVED_TIME',          0,
-        '$_LAST_ADVANCE_CLEANUP_BYTES', 0
+        '$_LISTS',              0,
+        '$_ITEMS',              0,
+        '$_OLDER_ALLOWED',      older_allowed,
+        '$_MIN_CLEANUP_BYTES',  min_cleanup_bytes,
+        '$_MIN_CLEANUP_ITEMS',  min_cleanup_items,
+        '$_MEMORY_RESERVE',     memory_reserve,
+        '$_DATA_VERSION',       data_version,
+        '$_LAST_REMOVED_TIME',  0,
+        '$_LAST_CLEANUP_BYTES', 0,
+        '$_LAST_CLEANUP_ITEMS', 0
     );
 end
 
 return {
     status_exist,
     older_allowed,
-    advance_cleanup_bytes,
-    advance_cleanup_num,
+    min_cleanup_bytes,
+    min_cleanup_items,
     memory_reserve,
     data_version
 };
@@ -1596,14 +1461,10 @@ This example illustrates a C<create()> call with all the valid arguments:
         redis   => { server => "$server:$port" },   # Redis object
                         # or hash reference to parameters to create a new Redis object.
         name    => 'Some name', # Redis::CappedCollection collection name.
-        advance_cleanup_bytes => 50_000, # The minimum size, in bytes,
-                        # of the data to be released, if the size
-                        # of the collection data after adding new data
-                        # may exceed Redis server 'maxmemory' paramemter.
-                        # Default 0 - additional data should not be released.
-        advance_cleanup_num => 1_000, # Maximum number of additional collection
-                        # elements to delete during cleanup
-                        # Default is 100, 0 - unlimited.
+        min_cleanup_bytes => 50_000,    # The minimum size, in bytes,
+                        # of the data to be released when performing memory cleanup.
+        min_cleanup_items => 1_000,     # The minimum number of the collection
+                        # elements to be realesed when performing memory cleanup.
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
         older_allowed   => 0, # Allow adding an element to collection that's older
@@ -1614,7 +1475,7 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # In some cases Redis implementation forbids such request,
                         # but setting 'check_maxmemory' to false can be used
                         # as a workaround.
-        memory_reserve  => 0,05,    # Reserve coefficient of 'maxmemory'.
+        memory_reserve  => 0.05,    # Reserve coefficient of 'maxmemory'.
                         # Not used when 'maxmemory' == 0 (it is not set in the redis.conf).
                         # When you add or modify the data trying to ensure
                         # reserve of free memory for metadata and bookkeeping.
@@ -1746,6 +1607,12 @@ Arguments description is the same as for L</create> method.
 
 =item I<check_maxmemory>
 
+=item I<reconnect_on_error>
+
+=item I<connection_timeout>
+
+=item I<operation_timeout>
+
 =back
 
 The C<redis> and C<name> arguments are mandatory.
@@ -1770,8 +1637,8 @@ my @_asked_parameters = qw(
 );
 my @_status_parameters = qw(
     older_allowed
-    advance_cleanup_bytes
-    advance_cleanup_num
+    min_cleanup_bytes
+    min_cleanup_items
     memory_reserve
 );
 
@@ -1911,50 +1778,48 @@ sub _operation_timeout_trigger {
     }
 }
 
-=head3 advance_cleanup_bytes
+=head3 min_cleanup_bytes
 
-Accessor for C<advance_cleanup_bytes> attribute - the minimum size,
-in bytes, of the data to be released in addition to memory reserve, if the size
-of the collection data after adding new data may exceed C<'maxmemory'>. Default
-is C<0> - additional data should not be released.
+Accessor for C<min_cleanup_bytes> attribute - The minimum size, in bytes,
+of the data to be released when performing memory cleanup.
+Default 0.
 
-The C<advance_cleanup_bytes> attribute is designed to reduce the release of memory
+The C<min_cleanup_bytes> attribute is designed to reduce the release of memory
 operations with frequent data changes.
 
-The C<advance_cleanup_bytes> attribute value can be provided to L</create>.
+The C<min_cleanup_bytes> attribute value can be provided to L</create>.
 The method returns and sets the current value of the attribute.
 
-The C<advance_cleanup_bytes> value must be less than or equal to C<'maxmemory'>. Otherwise
+The C<min_cleanup_bytes> value must be less than or equal to C<'maxmemory'>. Otherwise
 an error exception is thrown (C<confess>).
 
 =cut
-has advance_cleanup_bytes   => (
+has min_cleanup_bytes       => (
     is          => 'rw',
-    writer      => '_set_advance_cleanup_bytes',
+    writer      => '_set_min_cleanup_bytes',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 0,
     trigger     => sub {
         my $self = shift;
-        !$self->_maxmemory || ( $self->advance_cleanup_bytes <= $self->maxmemory || $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_bytes' ) );
+        !$self->_maxmemory || ( $self->min_cleanup_bytes <= $self->maxmemory || $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_bytes' ) );
     },
 );
 
-=head3 advance_cleanup_num
+=head3 min_cleanup_items
 
-The method accesses C<advance_cleanup_num> attribute - maximum number
-of additional collection elements to delete during cleanup (for example, when size of collection exceeds
-C<'maxmemory'>). Default 100. 0 is unlimited.
+The minimum number of the collection elements to be realesed
+when performing memory cleanup. Default 100.
 
-The C<advance_cleanup_num> attribute is designed to reduce number of times collection cleanup takes place.
+The C<min_cleanup_items> attribute is designed to reduce number of times collection cleanup takes place.
 Setting value too high may result in unwanted delays during operations with Redis.
 
-The C<advance_cleanup_num> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The C<min_cleanup_items> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
 
 =cut
-has advance_cleanup_num     => (
+has min_cleanup_items       => (
     is          => 'rw',
-    writer      => '_set_advance_cleanup_num',
+    writer      => '_set_min_cleanup_items',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 100,
 );
@@ -2126,9 +1991,9 @@ sub insert {
         $self->_DEBUG,
     );
 
-    my ( $error, $_cleanings, $_used_memory, $_bytes_deleted ) = @ret;
+    my ( $error, $_last_cleanup_items, $_used_memory, $_total_bytes_deleted ) = @ret;
 
-    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_cleanings ) ) ) {
+    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_last_cleanup_items ) ) ) {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
@@ -2146,7 +2011,7 @@ sub insert {
         $self->_process_unknown_error( @ret );
     }
 
-    return wantarray ? ( $list_id, $_cleanings, $_used_memory, $_bytes_deleted ) : $list_id;
+    return wantarray ? ( $list_id, $_last_cleanup_items, $_used_memory, $_total_bytes_deleted ) : $list_id;
 }
 
 =head3 update
@@ -2231,11 +2096,11 @@ sub update {
         $self->_DEBUG,
     );
 
-    my ( $error, $_cleanings, $_used_memory, $_bytes_deleted ) = @ret;
+    my ( $error, $_last_cleanup_items, $_used_memory, $_total_bytes_deleted ) = @ret;
 
-    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_cleanings ) ) ) {
+    if ( scalar( @ret ) == 4 && exists( $ERROR{ $error } ) && defined( _NONNEGINT( $_last_cleanup_items ) ) ) {
         if ( $error == $E_NO_ERROR ) {
-            return wantarray ? ( 1, $_cleanings, $_used_memory, $_bytes_deleted ) : 1;
+            return wantarray ? ( 1, $_last_cleanup_items, $_used_memory, $_total_bytes_deleted ) : 1;
         } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
             return 0;
         } elsif (
@@ -2446,7 +2311,7 @@ sub pop_oldest {
         $self->name,
     );
 
-    my ( $error, $queue_exist, $excess_id, $excess_data ) = @ret;
+    my ( $error, $queue_exist, $to_delete_id, $to_delete_data ) = @ret;
 
     if ( exists $ERROR{ $error } ) {
         $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
@@ -2456,7 +2321,7 @@ sub pop_oldest {
     }
 
     if ( $queue_exist ) {
-        return( $excess_id, $excess_data );
+        return( $to_delete_id, $to_delete_data );
     } else {
         return;
     }
@@ -2504,7 +2369,7 @@ sub redis_config_ok {
 Example:
 
     my $info = $coll->collection_info;
-    say 'An existing collection uses ', $info->{advance_cleanup_bytes}, " byte of 'advance_cleanup_bytes', ",
+    say 'An existing collection uses ', $info->{min_cleanup_bytes}, " byte of 'min_cleanup_bytes', ",
         $info->{items}, ' items are stored in ', $info->{lists}, ' lists';
     # or
     my $info = Redis::CappedCollection::collection_info(
@@ -2559,13 +2424,13 @@ C<memory_reserve> - Memory reserve coefficient.
 
 =item *
 
-C<advance_cleanup_bytes> - The minimum size, in bytes, of the data to be released,
-if the size of the collection data after adding new data may exceed C<'maxmemory'>.
+C<min_cleanup_bytes> - The minimum size, in bytes,
+of the data to be released when performing memory cleanup.
 
 =item *
 
-C<advance_cleanup_num> - Maximum number of data elements to delete, if the size
-of the collection data after adding new data may exceed C<'maxmemory'>.
+C<min_cleanup_items> - The minimum number of the collection elements
+to be realesed when performing memory cleanup.
 
 =item *
 
@@ -2587,8 +2452,8 @@ my @_collection_info_result_keys = qw(
     lists
     items
     older_allowed
-    advance_cleanup_bytes
-    advance_cleanup_num
+    min_cleanup_bytes
+    min_cleanup_items
     memory_reserve
     data_version
     last_removed_time
@@ -2909,7 +2774,7 @@ sub lists {
 
 Example:
 
-    $coll->resize( advance_cleanup_bytes => 100_000 );
+    $coll->resize( min_cleanup_bytes => 100_000 );
     my $redis = Redis->new( server => "$server:$port" );
     Redis::CappedCollection::resize( redis => $redis, name => 'Some name', older_allowed => 1 );
 
@@ -2923,8 +2788,8 @@ arguments.
 
 These arguments are in key-value pairs as described for L</create> method.
 
-It is possible to change the following parameters: C<older_allowed>, C<advance_cleanup_bytes>,
-C<advance_cleanup_num>, C<memory_reserve>. One or more parameters are required.
+It is possible to change the following parameters: C<older_allowed>, C<min_cleanup_bytes>,
+C<min_cleanup_items>, C<memory_reserve>. One or more parameters are required.
 
 Returns the number of completed changes.
 
@@ -2969,7 +2834,7 @@ sub resize {
     my $resized = 0;
     foreach my $parameter ( @_status_parameters ) {
         if ( exists $arguments{ $parameter } ) {
-            if ( $parameter eq 'advance_cleanup_bytes' || $parameter eq 'advance_cleanup_num' ) {
+            if ( $parameter eq 'min_cleanup_bytes' || $parameter eq 'min_cleanup_items' ) {
                 confess "'$parameter' must be nonnegative integer"
                     unless _NONNEGINT( $arguments{ $parameter } );
             } elsif ( $parameter eq 'memory_reserve' ) {
@@ -2990,10 +2855,10 @@ sub resize {
 
             if ( $ret == 0 ) {   # 0 if field already exists in the hash and the value was updated
                 if ( $self ) {
-                    if ( $parameter eq 'advance_cleanup_bytes' ) {
-                        $self->_set_advance_cleanup_bytes( $new_val );
-                    } elsif ( $parameter eq 'advance_cleanup_num' ) {
-                        $self->_set_advance_cleanup_num( $new_val );
+                    if ( $parameter eq 'min_cleanup_bytes' ) {
+                        $self->_set_min_cleanup_bytes( $new_val );
+                    } elsif ( $parameter eq 'min_cleanup_items' ) {
+                        $self->_set_min_cleanup_items( $new_val );
                     } elsif ( $parameter eq 'memory_reserve' ) {
                         $self->_set_memory_reserve( $new_val );
                     } else {
@@ -3467,24 +3332,24 @@ sub _verify_collection {
 
     $self->_set_last_errorcode( $E_NO_ERROR );
 
-    my ( $status_exist, $older_allowed, $advance_cleanup_bytes, $advance_cleanup_num, $memory_reserve, $data_version ) = $self->_call_redis(
+    my ( $status_exist, $older_allowed, $min_cleanup_bytes, $min_cleanup_items, $memory_reserve, $data_version ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
         0,
         $self->name,
         $self->older_allowed ? 1 : 0,
-        $self->advance_cleanup_bytes || 0,
-        $self->advance_cleanup_num || 0,
+        $self->min_cleanup_bytes || 0,
+        $self->min_cleanup_items || 0,
         $self->memory_reserve || $MIN_MEMORY_RESERVE,
         );
 
     if ( $status_exist ) {
-        $self->advance_cleanup_bytes( $advance_cleanup_bytes )  unless $self->advance_cleanup_bytes;
-        $self->advance_cleanup_num( $advance_cleanup_num )      unless $self->advance_cleanup_num;
-        $older_allowed          == $self->older_allowed         or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
-        $advance_cleanup_bytes  == $self->advance_cleanup_bytes or $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_bytes' );
-        $advance_cleanup_num    == $self->advance_cleanup_num   or $self->_throw( $E_MISMATCH_ARG, 'advance_cleanup_num' );
-        $memory_reserve         == $self->memory_reserve        or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
-        $data_version           == $DATA_VERSION                or $self->_throw( $E_INCOMP_DATA_VERSION );
+        $self->min_cleanup_bytes( $min_cleanup_bytes )  unless $self->min_cleanup_bytes;
+        $self->min_cleanup_items( $min_cleanup_items )  unless $self->min_cleanup_items;
+        $older_allowed      == $self->older_allowed     or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
+        $min_cleanup_bytes  == $self->min_cleanup_bytes or $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_bytes' );
+        $min_cleanup_items  == $self->min_cleanup_items or $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_items' );
+        $memory_reserve     == $self->memory_reserve    or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
+        $data_version       == $DATA_VERSION            or $self->_throw( $E_INCOMP_DATA_VERSION );
     }
 }
 
@@ -3854,7 +3719,7 @@ An example of error handling.
     my ( $lists, $items );
     eval {
         my $info = $coll->collection_info;
-        say 'An existing collection uses ', $info->{advance_cleanup_bytes}, " byte of 'advance_cleanup_bytes', ",
+        say 'An existing collection uses ', $info->{min_cleanup_bytes}, " byte of 'min_cleanup_bytes', ",
             'in ', $info->{items}, ' items are placed in ',
             $info->{lists}, ' lists';
 
@@ -3894,24 +3759,23 @@ CappedCollection package creates the following data structures on Redis:
     #                         Capped Collection id
     ...
     redis 127.0.0.1:6379> HGETALL "C:S:Some collection name"
-    1) "lists"                          # hash key
-    2) "1"                              # the key value
-    3) "items"                          # hash key
-    4) "1"                              # the key value
-    5) "older_allowed"                  # hash key
-    6) "0"                              # the key value
-    7) "advance_cleanup_bytes"          # hash key
-    8) "0"                              # the key value
-    9) "advance_cleanup_num"            # hash key
-    10) "100"                           # the key value
-    11) "memory_reserve"                # hash key
-    12) "0,05"                          # the key value
-    13) "data_version"                  # hash key
-    14) "3"                             # the key value
-    15) "last_removed_time"             # hash key
-    16) "0"                             # the key value
-    17) "last_advance_cleanup_bytes"    # hash key
-    18) "0"                             # the key value
+    1) "lists"              # hash key
+    2) "1"                  # the key value
+    3) "items"              # hash key
+    4) "1"                  # the key value
+    5) "older_allowed"      # hash key
+    6) "0"                  # the key value
+    7) "min_cleanup_bytes"  # hash key
+    8) "0"                  # the key value
+    9) "min_cleanup_items"  # hash key
+    10) "100"               # the key value
+    11) "memory_reserve"    # hash key
+    12) "0.05"              # the key value
+    13) "data_version"      # hash key
+    14) "3"                 # the key value
+    15) "last_removed_time" # hash key
+    16) "0"                 # the key value
+    ...
 
     #-- To store collection queue:
     # ZSET    Namespace:Q:Collection_id
