@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+    FIXES:
+    - Makefile.PL corrected.
+    - Tests corrected.
+
 1.06  Thu Apr  28 2016
     CHANGES:
     - Ability to force re-connection with Redis on error ('reconnect_on_error' attribute).

@@ -116,6 +116,9 @@ sub testing {
             }
             diag scalar( @cleanings_operations )."/$inserts cleaning operations";
             print_result_times( \@cleanings_operations );
+
+            $COLLECTION->drop_collection;
+            $COLLECTION->quit;
         }
     }
 }

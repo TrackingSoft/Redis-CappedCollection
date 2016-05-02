@@ -230,6 +230,9 @@ sub test_insert {
         is $new_AFTER_info->{items}, $AFTER_info->{items} + 1, 'item added ones';
     }
     ok $expected_used_memory <= $MAX_DATA_BYTES_AVAILABLE, 'no excess data';
+
+    $COLLECTION->drop_collection;
+    $COLLECTION->quit;
 }
 
 sub max_data_bytes_available {

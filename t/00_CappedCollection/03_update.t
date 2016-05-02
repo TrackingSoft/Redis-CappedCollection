@@ -62,6 +62,7 @@ my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis   => $redis,
     name    => $uuid->create_str,
@@ -118,6 +119,7 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 
 #-- resizing
 
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis   => $redis,
     name    => $uuid->create_str,
@@ -148,6 +150,7 @@ for ( my $i = 1; $i <= 10; ++$i )
 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis   => $redis,
     name    => $uuid->create_str,
@@ -209,6 +212,7 @@ foreach my $arg ( ( undef, "", \"scalar", [], $uuid ) )
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 $name = 'Coll';
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis   => $redis,
     name    => $name,

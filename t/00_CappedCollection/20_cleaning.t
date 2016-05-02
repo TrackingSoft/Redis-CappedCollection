@@ -93,8 +93,14 @@ SKIP: {
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
     $MEMORY_RESERVE_COEFFICIENT = 1 + $MIN_MEMORY_RESERVE;
+
 sub new_connection {
     my ( $name, $maxmemory, $min_cleanup_bytes, $min_cleanup_items, $memory_reserve ) = @_;
+
+    if ( $COLLECTION ) {
+        $COLLECTION->drop_collection;
+        $COLLECTION->quit;
+    }
 
     if ( $REDIS_SERVER ) {
         $REDIS_SERVER->stop;

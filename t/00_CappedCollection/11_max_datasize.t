@@ -62,6 +62,11 @@ my $msg = "attribute is set correctly";
 
 my $maxmemory_mode;
 sub new_connect {
+    if ( $coll ) {
+        $coll->drop_collection;
+        $coll->quit;
+    }
+
     # For Test::RedisServer
     $redis->stop if $redis;
     $redis = get_redis( conf =>

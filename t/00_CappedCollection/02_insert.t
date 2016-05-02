@@ -68,6 +68,7 @@ my ( $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";
 
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
@@ -113,6 +114,7 @@ controlled_call( $method, "ID", ++$data_id, "Stuff" );
 controlled_call( $method, "ID", ++$data_id, "Stuff" );
 
 # errors in the arguments
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
@@ -196,6 +198,7 @@ dies_ok { $id = controlled_call( $method, "Some id", ++$data_id, "Some stuff" ) 
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 # Remove old data
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
@@ -220,6 +223,7 @@ is $coll->last_errorcode, $E_REDIS_DID_NOT_RETURN_DATA, "correct lists value";
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 #-------------------------------------------------------------------------------
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
@@ -251,6 +255,7 @@ is scalar( @arr ), 10, "correct lists value";
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 #-------------------------------------------------------------------------------
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis               => $redis,
     name                => $uuid->create_str,
@@ -286,6 +291,7 @@ lives_ok {
 } "expecting to live: ";
 is $coll->last_errorcode, $E_NO_ERROR, 'E_NO_ERROR';
 
+$coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
     redis   => { $redis->connect_info },    # HashRef
     name    => $uuid->create_str,

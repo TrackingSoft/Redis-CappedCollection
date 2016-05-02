@@ -80,6 +80,7 @@ sub new_connect {
 
     $data_id = 0;
 
+    $coll->quit if $coll;
     $coll = Redis::CappedCollection->create(
         redis   => $redis,
         name    => $uuid->create_str,

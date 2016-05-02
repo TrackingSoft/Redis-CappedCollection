@@ -99,6 +99,7 @@ sub new_connect {
     skip( $redis_error, 1 ) unless $redis;
     isa_ok( $redis, 'Test::RedisServer' );
 
+    $coll->quit if $coll;
     $coll = Redis::CappedCollection->create(
         redis           => { $redis->connect_info },
         name            => $uuid->create_str,

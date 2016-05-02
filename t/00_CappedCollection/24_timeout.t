@@ -101,6 +101,9 @@ sub testing {
     ok !$REDIS->{sock}->write_timeout, 'socket write_timeout is unset';
     ok !$REDIS->{sock}->timeout_enabled, 'socket read/write timeout disabled';
     work();
+
+    $COLLECTION->drop_collection;
+    $COLLECTION->quit;
 }
 
 sub new_connection {

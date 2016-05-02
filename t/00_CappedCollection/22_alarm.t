@@ -259,6 +259,10 @@ sub create_new_collection {
     my $start_time = Time::HiRes::time();
     for ( ; $attempt <= $MAX_HIRES_ATTEMPTS; $attempt++ ) {
         my $error;
+        if ( $coll ) {
+            $coll->drop_collection;
+            $coll->quit;
+        }
         try {
             $coll = Redis::CappedCollection->create(
                 redis   => $redis,

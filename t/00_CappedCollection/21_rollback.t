@@ -84,6 +84,11 @@ my $CURRENT_DATA_ID = 1;
 
 sub get_collection {
 
+    if ( $COLLECTION ) {
+        $COLLECTION->drop_collection;
+        $COLLECTION->quit;
+    }
+
     if ( $REDIS_SERVER ) {
         $REDIS_SERVER->stop;
         undef $REDIS_SERVER;
