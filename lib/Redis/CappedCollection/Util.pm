@@ -6,7 +6,7 @@ Redis::CappedCollection::Util - String manipulation utilities.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection::Util> version 1.06
+This documentation refers to C<Redis::CappedCollection::Util> version 1.07
 
 =cut
 
@@ -18,7 +18,7 @@ use warnings;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 
 use Exporter qw(
     import
