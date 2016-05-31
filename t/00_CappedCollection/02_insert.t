@@ -70,9 +70,9 @@ my $msg = "attribute is set correctly";
 
 $coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
-    redis               => $redis,
-    name                => $uuid->create_str,
-    min_cleanup_items   => 0,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -116,9 +116,9 @@ controlled_call( $method, "ID", ++$data_id, "Stuff" );
 # errors in the arguments
 $coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
-    redis               => $redis,
-    name                => $uuid->create_str,
-    min_cleanup_items   => 0,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -200,9 +200,9 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 # Remove old data
 $coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
-    redis               => $redis,
-    name                => $uuid->create_str,
-    min_cleanup_items   => 0,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -225,9 +225,9 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 #-------------------------------------------------------------------------------
 $coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
-    redis               => $redis,
-    name                => $uuid->create_str,
-    min_cleanup_items   => 0,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -257,9 +257,9 @@ $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE."
 #-------------------------------------------------------------------------------
 $coll->quit if $coll;
 $coll = Redis::CappedCollection->create(
-    redis               => $redis,
-    name                => $uuid->create_str,
-    min_cleanup_items   => 0,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    cleanup_items   => 0,
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 

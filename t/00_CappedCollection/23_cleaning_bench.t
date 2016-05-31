@@ -86,19 +86,19 @@ sub testing {
 #    my $inserts = 10_000_000;
     diag "maxmemory = $maxmemory, list_id length = $list_id_len, data length = $data_len, data_id length = ".length( Time::HiRes::time );
 
-    foreach my $min_cleanup_bytes ( 0, 100, 10_000 ) {
-        foreach my $min_cleanup_items ( 0, 100, 10_000 ) {
-#    foreach my $min_cleanup_bytes ( 60 * 1024 ) {
-#        foreach my $min_cleanup_items ( 200 ) {
+    foreach my $cleanup_bytes ( 0, 100, 10_000 ) {
+        foreach my $cleanup_items ( 0, 100, 10_000 ) {
+#    foreach my $cleanup_bytes ( 60 * 1024 ) {
+#        foreach my $cleanup_items ( 200 ) {
             new_connection(
                 undef,      # name
                 $maxmemory,
-                $min_cleanup_bytes,
-                $min_cleanup_items,
+                $cleanup_bytes,
+                $cleanup_items,
             );
 
             diag "--------------------------------------------------";
-            diag "min_cleanup_bytes = $min_cleanup_bytes, min_cleanup_items = $min_cleanup_items";
+            diag "cleanup_bytes = $cleanup_bytes, cleanup_items = $cleanup_items";
             my @cleanings_operations;
             for ( my $i = 1; $i <= $inserts; $i++ ) {
                 my $start_time = Time::HiRes::time;
@@ -124,7 +124,7 @@ sub testing {
 }
 
 sub new_connection {
-    my ( $name, $maxmemory, $min_cleanup_bytes, $min_cleanup_items, $memory_reserve ) = @_;
+    my ( $name, $maxmemory, $cleanup_bytes, $cleanup_items, $memory_reserve ) = @_;
 
     if ( $REDIS_SERVER ) {
         $REDIS_SERVER->stop;
@@ -143,13 +143,13 @@ sub new_connection {
     isa_ok( $REDIS_SERVER, 'Test::RedisServer' );
 
     $COLLECTION = Redis::CappedCollection->create(
-        redis                   => $REDIS_SERVER,
-        name                    => $uuid->create_str,
-        'older_allowed'         => 1,
-        $name                   ? ( name                    => $name )                  : (),
-        $min_cleanup_bytes      ? ( 'min_cleanup_bytes'     => $min_cleanup_bytes )     : (),
-        $min_cleanup_items      ? ( 'min_cleanup_items'     => $min_cleanup_items )     : (),
-        $memory_reserve         ? ( memory_reserve          => $memory_reserve )        : (),
+        redis           => $REDIS_SERVER,
+        name            => $uuid->create_str,
+        'older_allowed' => 1,
+        $name           ? ( name            => $name )              : (),
+        $cleanup_bytes  ? ( 'cleanup_bytes' => $cleanup_bytes )     : (),
+        $cleanup_items  ? ( 'cleanup_items' => $cleanup_items )     : (),
+        $memory_reserve ? ( memory_reserve  => $memory_reserve )    : (),
     );
     isa_ok( $COLLECTION, 'Redis::CappedCollection' );
 

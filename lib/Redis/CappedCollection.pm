@@ -35,7 +35,7 @@ our @EXPORT_OK  = qw(
     $NAMESPACE
     $MIN_MEMORY_RESERVE
     $MAX_MEMORY_RESERVE
-    $DEFAULT_MIN_CLEANUP_ITEMS
+    $DEFAULT_CLEANUP_ITEMS
 
     $E_NO_ERROR
     $E_MISMATCH_ARG
@@ -238,7 +238,7 @@ const our $MIN_MEMORY_RESERVE   => 0.05;    # 5% memory reserve coefficient
 const our $MAX_MEMORY_RESERVE   => 0.5;     # 50% memory reserve coefficient
 
 
-=head3 $DEFAULT_MIN_CLEANUP_ITEMS
+=head3 $DEFAULT_CLEANUP_ITEMS
 
 Number of additional elements to delete from collection during cleanup procedure when collection size
 exceeds 'maxmemory'.
@@ -247,7 +247,7 @@ Default 100 elements. 0 means no minimal cleanup required,
 so memory cleanup will be performed only to free up sufficient amount of memory.
 
 =cut
-const our $DEFAULT_MIN_CLEANUP_ITEMS    => 100;
+const our $DEFAULT_CLEANUP_ITEMS    => 100;
 
 =head3 $DATA_VERSION
 
@@ -394,6 +394,8 @@ Possibly you should modify the constructor parameters for more intense automatic
 =cut
 const our $E_UNKNOWN_ERROR          => -1013;
 
+our $DEBUG = 0;
+
 our %ERROR = (
     $E_NO_ERROR             => 'No error',
     $E_MISMATCH_ARG         => 'Invalid argument',
@@ -422,8 +424,8 @@ const my $USED_MEMORY_POLICY        => 'noeviction';
 const my $_LISTS                        => 'lists';
 const my $_ITEMS                        => 'items';
 const my $_OLDER_ALLOWED                => 'older_allowed';
-const my $_MIN_CLEANUP_BYTES            => 'min_cleanup_bytes';
-const my $_MIN_CLEANUP_ITEMS            => 'min_cleanup_items';
+const my $_CLEANUP_BYTES                => 'cleanup_bytes';
+const my $_CLEANUP_ITEMS                => 'cleanup_items';
 const my $_MEMORY_RESERVE               => 'memory_reserve';
 const my $_DATA_VERSION                 => 'data_version';
 const my $_LAST_REMOVED_TIME            => 'last_removed_time';
@@ -435,6 +437,7 @@ const my $_LAST_CLEANUP_USED_MEMORY             => 'last_cleanup_used_memory';
 const my $_LAST_CLEANUP_BYTES_MUST_BE_DELETED   => 'last_bytes_must_be_deleted';
 const my $_INSERTS_SINCE_CLEANING               => 'inserts_since_cleaning';
 const my $_UPDATES_SINCE_CLEANING               => 'updates_since_cleaning';
+const my $_MAX_LAST_CLEANUP_VALUES              => 10;
 
 my $_lua_namespace  = "local NAMESPACE  = '".$NAMESPACE."'";
 my $_lua_queue_key  = "local QUEUE_KEY  = NAMESPACE..':Q:'..coll_name";
@@ -481,7 +484,6 @@ local REDIS_MAXMEMORY                       = 0
 local ROLLBACK                              = {}
 local TOTAL_BYTES_DELETED                   = 0
 local LAST_CLEANUP_BYTES_MUST_BE_DELETED    = 0
-local LAST_CLEANUP_BYTES                    = 0
 local LAST_CLEANUP_ITEMS                    = 0
 local LAST_OPERATION                        = ''
 local INSERTS_SINCE_CLEANING                = 0
@@ -525,11 +527,6 @@ local _setup = function ( argv_idx, func_name, extra_data_len )
         LAST_CLEANUP_BYTES_MUST_BE_DELETED = 0
     end
 
-    LAST_CLEANUP_BYTES = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_CLEANUP_BYTES' ) )
-    if LAST_CLEANUP_BYTES == nil then
-        LAST_CLEANUP_BYTES = 0
-    end
-
     INSERTS_SINCE_CLEANING = tonumber( redis.call( 'HGET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING' ) )
     if INSERTS_SINCE_CLEANING == nil then
         INSERTS_SINCE_CLEANING = 0
@@ -554,6 +551,21 @@ local _setup = function ( argv_idx, func_name, extra_data_len )
     end
 end
 
+local renew_last_cleanup_values = function ()
+    if LAST_CLEANUP_ITEMS > 0 then
+        local last_cleanup_bytes_values = cjson.decode( redis.call( 'HGET', STATUS_KEY, '$_LAST_CLEANUP_BYTES' ) )
+        local last_cleanup_items_values = cjson.decode( redis.call( 'HGET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS' ) )
+        if #last_cleanup_bytes_values >= 10 then
+            table.remove ( last_cleanup_bytes_values, 1 )
+            table.remove ( last_cleanup_items_values, 1 )
+        end
+        table.insert( last_cleanup_bytes_values, TOTAL_BYTES_DELETED )
+        table.insert( last_cleanup_items_values, LAST_CLEANUP_ITEMS )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', cjson.encode( last_cleanup_bytes_values ) )
+        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS', cjson.encode( last_cleanup_items_values ) )
+    end
+end
+
 local cleaning_error = function ( error_msg )
     if _DEBUG then
         _debug_log( {
@@ -566,6 +578,7 @@ local cleaning_error = function ( error_msg )
         redis.call( unpack( rollback_command ) )
     end
     -- Level 2 points the error to where the function that called error was called
+    renew_last_cleanup_values()
     error( error_msg, 2 )
 end
 
@@ -611,10 +624,8 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         return
     end
 
-    local min_cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MIN_CLEANUP_BYTES' ) )
-    local min_cleanup_items = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MIN_CLEANUP_ITEMS' ) )
-
-    local cleanup_bytes = math.max( min_cleanup_bytes, LAST_CLEANUP_BYTES_MUST_BE_DELETED )
+    local cleanup_bytes = tonumber( redis.call( 'HGET', STATUS_KEY, '$_CLEANUP_BYTES' ) )
+    local cleanup_items = tonumber( redis.call( 'HGET', STATUS_KEY, '$_CLEANUP_ITEMS' ) )
 
     if not ( is_cleaning_needed or LAST_CLEANUP_BYTES_MUST_BE_DELETED > 0 ) then
         return
@@ -622,10 +633,10 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
 
     if _DEBUG then
         _debug_log( {
-            _STEP               = 'Before cleanings',
-            coll_items          = coll_items,
-            min_cleanup_items   = min_cleanup_items,
-            min_cleanup_bytes   = min_cleanup_bytes,
+            _STEP           = 'Before cleanings',
+            coll_items      = coll_items,
+            cleanup_items   = cleanup_items,
+            cleanup_bytes   = cleanup_bytes,
         } )
     end
 
@@ -634,8 +645,9 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
     local lists_deleted = 0
 
     repeat
-        if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
+        if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
             -- Level 2 points the error to where the function that called error was called
+            renew_last_cleanup_values()
             error( 'Queue key does not exist', 2 )
         end
 
@@ -656,7 +668,7 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         if items == 1 then
             to_delete_data_id, to_delete_data = unpack( redis.call( 'HGETALL', to_delete_data_key ) )
         else
-            to_delete_data_id = redis.call( 'ZRANGE', to_delete_time_key, 0, 0 )[1]
+            to_delete_data_id = unpack( redis.call( 'ZRANGE', to_delete_time_key, 0, 0 ) )
             to_delete_data    = redis.call( 'HGET', to_delete_data_key, to_delete_data_id )
         end
         local to_delete_data_len = #to_delete_data
@@ -684,12 +696,12 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
 
         if _DEBUG then
             _debug_log( {
-                _STEP               = 'Why it is cleared?',
-                coll_items          = coll_items,
-                min_cleanup_bytes   = min_cleanup_bytes,
-                min_cleanup_items   = min_cleanup_items,
-                items_deleted       = items_deleted,
-                bytes_deleted       = bytes_deleted,
+                _STEP           = 'Why it is cleared?',
+                coll_items      = coll_items,
+                cleanup_bytes   = cleanup_bytes,
+                cleanup_items   = cleanup_items,
+                items_deleted   = items_deleted,
+                bytes_deleted   = bytes_deleted,
             } )
         end
 
@@ -734,7 +746,7 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
     until
             coll_items <= 0
         or (
-               items_deleted >= min_cleanup_items
+                items_deleted >= cleanup_items
             and bytes_deleted >= cleanup_bytes
         )
 
@@ -749,35 +761,28 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
 
     if _DEBUG then
         _debug_log( {
-            _STEP               = 'Cleaning finished',
-            items_deleted       = items_deleted,
-            bytes_deleted       = bytes_deleted,
-            lists_deleted       = lists_deleted,
-            min_cleanup_bytes   = min_cleanup_bytes,
-            min_cleanup_items   = min_cleanup_items,
-            coll_items          = coll_items,
+            _STEP           = 'Cleaning finished',
+            items_deleted   = items_deleted,
+            bytes_deleted   = bytes_deleted,
+            lists_deleted   = lists_deleted,
+            cleanup_bytes   = cleanup_bytes,
+            cleanup_items   = cleanup_items,
+            coll_items      = coll_items,
         } )
     end
 
     if bytes_deleted > 0 then
         if TOTAL_BYTES_DELETED == 0 then    -- first cleaning
-            LAST_CLEANUP_BYTES = bytes_deleted
-            redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
             INSERTS_SINCE_CLEANING = 0
             redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
             UPDATES_SINCE_CLEANING = 0
             redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
-        else
-            LAST_CLEANUP_BYTES = LAST_CLEANUP_BYTES + bytes_deleted
-            redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
         end
 
         TOTAL_BYTES_DELETED = TOTAL_BYTES_DELETED + bytes_deleted
         LAST_CLEANUP_ITEMS = LAST_CLEANUP_ITEMS + items_deleted
-        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS', LAST_CLEANUP_ITEMS )
 
         -- information values
-        redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_ITEMS', LAST_CLEANUP_ITEMS )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_MAXMEMORY', REDIS_MAXMEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_USED_MEMORY', REDIS_USED_MEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES_MUST_BE_DELETED', LAST_CLEANUP_BYTES_MUST_BE_DELETED )
@@ -838,7 +843,7 @@ $_lua_data_key
 $_lua_time_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 
@@ -850,7 +855,7 @@ end
 -- Validating the time of new data, if required
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
 
-if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
+if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
             return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
@@ -871,7 +876,7 @@ cleaning( list_id, data_id, false )
 local items = redis.call( 'HLEN', DATA_KEY )
 local existing_id, existing_time
 if items == 1 then
-    existing_id   = redis.call( 'HGETALL', DATA_KEY )[1]
+    existing_id   = unpack( redis.call( 'HGETALL', DATA_KEY ) )
     existing_time = tonumber( redis.call( 'ZSCORE', QUEUE_KEY, list_id ) )
 end
 
@@ -900,7 +905,8 @@ if data_time < last_removed_time then
     redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', 0 )
 end
 
-redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
+renew_last_cleanup_values()
+-- redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES', LAST_CLEANUP_BYTES )
 INSERTS_SINCE_CLEANING = INSERTS_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
 
@@ -926,10 +932,10 @@ $_lua_data_key
 $_lua_time_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
-if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
+if redis.call( 'EXISTS', DATA_KEY ) == 0 then
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 local extra_data_len
@@ -946,7 +952,7 @@ else
 end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
-if redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ~= '1' then
+if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
     if new_data_time ~= 0 and new_data_time < last_removed_time then
         return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
     end
@@ -959,7 +965,7 @@ cleaning( list_id, data_id, false )
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
-if redis.call( 'HEXISTS', DATA_KEY, data_id ) ~= 1 then
+if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 0 then
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
@@ -983,6 +989,7 @@ if new_data_time ~= 0 then
     end
 end
 
+renew_last_cleanup_values()
 UPDATES_SINCE_CLEANING = UPDATES_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
 
@@ -1032,7 +1039,7 @@ $_lua_data_keys
 $_lua_data_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
     return nil
 end
@@ -1067,11 +1074,11 @@ $_lua_queue_key
 $_lua_status_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
-if redis.call( 'EXISTS', QUEUE_KEY ) ~= 1 then
+if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
     return { $E_NO_ERROR, false, nil, nil }
 end
 
@@ -1081,7 +1088,7 @@ local list_id       = false
 local data          = false
 
 -- identifier of the list with the oldest data
-list_id = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0 )[1]
+list_id = unpack( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0 ) )
 
 -- key data storage structures
 $_lua_data_keys
@@ -1090,7 +1097,7 @@ $_lua_data_key
 $_lua_time_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
+if redis.call( 'EXISTS', DATA_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 
@@ -1098,9 +1105,9 @@ end
 local items = redis.call( 'HLEN', DATA_KEY )
 local data_id
 if items == 1 then
-    data_id = redis.call( 'HGETALL', DATA_KEY )[1]
+    data_id = unpack( redis.call( 'HGETALL', DATA_KEY ) )
 else
-    data_id = redis.call( 'ZRANGE', TIME_KEY, 0, 0 )[1]
+    data_id = unpack( redis.call( 'ZRANGE', TIME_KEY, 0, 0 ) )
 end
 local last_removed_time = tonumber( redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2] )
 
@@ -1156,17 +1163,17 @@ $_lua_queue_key
 $_lua_status_key
 
 -- determine whether there is a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
 end
 
 local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-local lists, items, older_allowed, min_cleanup_bytes, min_cleanup_items, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
+local lists, items, older_allowed, cleanup_bytes, cleanup_items, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_LISTS',
         '$_ITEMS',
         '$_OLDER_ALLOWED',
-        '$_MIN_CLEANUP_BYTES',
-        '$_MIN_CLEANUP_ITEMS',
+        '$_CLEANUP_BYTES',
+        '$_CLEANUP_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION',
         '$_LAST_REMOVED_TIME'
@@ -1179,8 +1186,8 @@ return {
     lists,
     items,
     older_allowed,
-    min_cleanup_bytes,
-    min_cleanup_items,
+    cleanup_bytes,
+    cleanup_items,
     memory_reserve,
     data_version,
     last_removed_time,
@@ -1199,7 +1206,7 @@ $_lua_queue_key
 $_lua_status_key
 
 -- determine whe, falther there is a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, false }
 end
 
@@ -1221,18 +1228,18 @@ $_lua_data_keys
 $_lua_data_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, false, nil }
 end
-if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
+if redis.call( 'EXISTS', DATA_KEY ) == 0 then
     return { $E_NO_ERROR, false, nil }
 end
 
 -- the length of the data list
-local items         = redis.call( 'HLEN', DATA_KEY )
+local items = redis.call( 'HLEN', DATA_KEY )
 
 -- the second data
-local oldest_item_time   = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
+local oldest_item_time = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
 
 return { $E_NO_ERROR, items, oldest_item_time }
 END_LIST_INFO
@@ -1293,10 +1300,10 @@ $_lua_data_keys
 $_lua_data_key
 
 -- determine whether there is a list of data and a collection
-if redis.call( 'EXISTS', STATUS_KEY ) ~= 1 then
+if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return { $E_COLLECTION_DELETED, 0 }
 end
-if redis.call( 'EXISTS', DATA_KEY ) ~= 1 then
+if redis.call( 'EXISTS', DATA_KEY ) == 0 then
     return { $E_NO_ERROR, 0 }
 end
 
@@ -1312,7 +1319,7 @@ local bytes_deleted = 0
 local vals = redis.call( 'HVALS', DATA_KEY )
 local list_items = #vals
 for i = 1, list_items do
-    bytes_deleted   = bytes_deleted + #vals[ i ]
+    bytes_deleted = bytes_deleted + #vals[ i ]
 end
 redis.call( 'DEL', DATA_KEY, TIME_KEY )
 
@@ -1331,8 +1338,8 @@ $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
 
 local coll_name         = ARGV[1];
 local older_allowed     = ARGV[2];
-local min_cleanup_bytes = ARGV[3];
-local min_cleanup_items = ARGV[4];
+local cleanup_bytes     = ARGV[3];
+local cleanup_items     = ARGV[4];
 local memory_reserve    = ARGV[5];
 
 local data_version = '$DATA_VERSION'
@@ -1346,10 +1353,10 @@ local status_exist = redis.call( 'EXISTS', STATUS_KEY );
 
 if status_exist == 1 then
 -- if there is a collection
-    older_allowed, min_cleanup_bytes, min_cleanup_items, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
+    older_allowed, cleanup_bytes, cleanup_items, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_OLDER_ALLOWED',
-        '$_MIN_CLEANUP_BYTES',
-        '$_MIN_CLEANUP_ITEMS',
+        '$_CLEANUP_BYTES',
+        '$_CLEANUP_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION'
     ) );
@@ -1361,21 +1368,21 @@ else
         '$_LISTS',              0,
         '$_ITEMS',              0,
         '$_OLDER_ALLOWED',      older_allowed,
-        '$_MIN_CLEANUP_BYTES',  min_cleanup_bytes,
-        '$_MIN_CLEANUP_ITEMS',  min_cleanup_items,
+        '$_CLEANUP_BYTES',      cleanup_bytes,
+        '$_CLEANUP_ITEMS',      cleanup_items,
         '$_MEMORY_RESERVE',     memory_reserve,
         '$_DATA_VERSION',       data_version,
         '$_LAST_REMOVED_TIME',  0,
-        '$_LAST_CLEANUP_BYTES', 0,
-        '$_LAST_CLEANUP_ITEMS', 0
+        '$_LAST_CLEANUP_BYTES', '[0]',
+        '$_LAST_CLEANUP_ITEMS', '[0]'
     );
 end
 
 return {
     status_exist,
     older_allowed,
-    min_cleanup_bytes,
-    min_cleanup_items,
+    cleanup_bytes,
+    cleanup_items,
     memory_reserve,
     data_version
 };
@@ -1461,9 +1468,9 @@ This example illustrates a C<create()> call with all the valid arguments:
         redis   => { server => "$server:$port" },   # Redis object
                         # or hash reference to parameters to create a new Redis object.
         name    => 'Some name', # Redis::CappedCollection collection name.
-        min_cleanup_bytes => 50_000,    # The minimum size, in bytes,
+        cleanup_bytes => 50_000,    # The minimum size, in bytes,
                         # of the data to be released when performing memory cleanup.
-        min_cleanup_items => 1_000,     # The minimum number of the collection
+        cleanup_items => 1_000,     # The minimum number of the collection
                         # elements to be realesed when performing memory cleanup.
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
@@ -1497,12 +1504,12 @@ The following examples illustrate other uses of the C<create> method:
     my $coll = Redis::CappedCollection->create( redis => $redis, name => 'Next collection' );
     my $next_coll = Redis::CappedCollection->create( redis => $coll, name => 'Some name' );
 
-An error exception is thrown (C<confess>) if an argument is not valid or the collection with
+An error exception is thrown (C<croak>) if an argument is not valid or the collection with
 same name already exists.
 
 =cut
 sub create {
-    my $class = _CLASSISA( shift, __PACKAGE__ ) or confess 'Must be called as a class method only';
+    my $class = _CLASSISA( shift, __PACKAGE__ ) or _croak( 'Must be called as a class method only' );
     return $class->new( @_, _create_from_naked_new => 0 );
 }
 
@@ -1545,7 +1552,7 @@ sub BUILD {
     if ( $self->_create_from_naked_new ) {
         warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
     } else {
-        confess format_message( "Collection '%s' already exists", $self->name )
+        _croak( format_message( "Collection '%s' already exists", $self->name ) )
             if !$self->_create_from_open && $self->collection_exists( name => $self->name );
     }
 
@@ -1562,7 +1569,7 @@ sub BUILD {
     my ( $major, $minor ) = $self->_redis->info->{redis_version} =~ /^(\d+)\.(\d+)/;
     if ( $major < 2 || ( $major == 2 && $minor < 8 ) ) {
         $self->_set_last_errorcode( $E_REDIS );
-        confess "Need a Redis server version 2.8 or higher";
+        _croak( "Need a Redis server version 2.8 or higher" );
     }
 
     $self->_throw( $E_MAXMEMORY_POLICY )
@@ -1623,7 +1630,7 @@ to work with the default settings if the corresponding arguments are not given.
 If C<redis> argument is not a L<Redis> object, a new connection to Redis is established using
 passed hash reference to create a new L<Redis> object.
 
-An error exception is thrown (C<confess>) if an argument is not valid.
+An error exception is thrown (C<croak>) if an argument is not valid.
 
 =cut
 my @_asked_parameters = qw(
@@ -1637,26 +1644,26 @@ my @_asked_parameters = qw(
 );
 my @_status_parameters = qw(
     older_allowed
-    min_cleanup_bytes
-    min_cleanup_items
+    cleanup_bytes
+    cleanup_items
     memory_reserve
 );
 
 sub open {
-    my $class = _CLASSISA( shift, __PACKAGE__ ) or confess 'Must be called as a class method only';
+    my $class = _CLASSISA( shift, __PACKAGE__ ) or _croak( 'Must be called as a class method only' );
 
     my %params = @_;
     _check_arguments_acceptability( \%params, \@_asked_parameters );
 
-    confess "'redis' argument is required"  unless exists $params{redis};
-    confess "'name' argument is required"   unless exists $params{name};
+    _croak( "'redis' argument is required" ) unless exists $params{redis};
+    _croak( "'name' argument is required" )  unless exists $params{name};
 
     my $use_external_connection = ref( $params{redis} ) ne 'HASH';
     my $redis   = $params{redis} = _get_redis( $params{redis} );
     my $name    = $params{name};
     if ( collection_exists( redis => $redis, name => $name ) ) {
         my $info = collection_info( redis => $redis, name => $name );
-        $info->{data_version} == $DATA_VERSION or confess $ERROR{ $E_INCOMP_DATA_VERSION };
+        $info->{data_version} == $DATA_VERSION or _croak( $ERROR{ $E_INCOMP_DATA_VERSION } );
         $params{ $_ } = $info->{ $_ } foreach @_status_parameters;
         return $class->new( %params,
             _create_from_naked_new      => 0,
@@ -1664,13 +1671,13 @@ sub open {
             _use_external_connection    => $use_external_connection,
         );
     } else {
-        confess format_message( "Collection '%s' does not exist", $name );
+        _croak( format_message( "Collection '%s' does not exist", $name ) );
     };
 }
 
 =head2 METHODS
 
-An exception is thrown (C<confess>) if any method argument is not valid or
+An exception is thrown (C<croak>) if any method argument is not valid or
 if a required argument is missing.
 
 ATTENTION: In the L<Redis|Redis> module the synchronous commands throw an
@@ -1734,7 +1741,7 @@ sub _connection_timeout_trigger {
     return if scalar( @_ ) == 2 && ( !defined( $timeout ) && !defined( $old_timeout ) );
 
     if ( my $redis = $self->_redis ) {
-        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or confess 'Bad socket object';
+        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or _croak( 'Bad socket object' );
         # IO::Socket provides a way to set a timeout on the socket,
         # but the timeout will be used only for connection,
         # not for reading / writing operations.
@@ -1762,7 +1769,7 @@ sub _operation_timeout_trigger {
     return if scalar( @_ ) == 2 && ( !defined( $timeout ) && !defined( $old_timeout ) );
 
     if ( my $redis = $self->_redis ) {
-        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or confess 'Bad socket object';
+        my $socket = _INSTANCE( $redis->{sock}, 'IO::Socket' ) or _croak( 'Bad socket object' );
         # IO::Socket::Timeout provides a way to set a timeout
         # on read / write operations on an IO::Socket instance,
         # or any IO::Socket::* modules, like IO::Socket::INET.
@@ -1778,48 +1785,48 @@ sub _operation_timeout_trigger {
     }
 }
 
-=head3 min_cleanup_bytes
+=head3 cleanup_bytes
 
-Accessor for C<min_cleanup_bytes> attribute - The minimum size, in bytes,
+Accessor for C<cleanup_bytes> attribute - The minimum size, in bytes,
 of the data to be released when performing memory cleanup.
 Default 0.
 
-The C<min_cleanup_bytes> attribute is designed to reduce the release of memory
+The C<cleanup_bytes> attribute is designed to reduce the release of memory
 operations with frequent data changes.
 
-The C<min_cleanup_bytes> attribute value can be provided to L</create>.
+The C<cleanup_bytes> attribute value can be provided to L</create>.
 The method returns and sets the current value of the attribute.
 
-The C<min_cleanup_bytes> value must be less than or equal to C<'maxmemory'>. Otherwise
-an error exception is thrown (C<confess>).
+The C<cleanup_bytes> value must be less than or equal to C<'maxmemory'>. Otherwise
+an error exception is thrown (C<croak>).
 
 =cut
-has min_cleanup_bytes       => (
+has cleanup_bytes           => (
     is          => 'rw',
-    writer      => '_set_min_cleanup_bytes',
+    writer      => '_set_cleanup_bytes',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 0,
     trigger     => sub {
         my $self = shift;
-        !$self->_maxmemory || ( $self->min_cleanup_bytes <= $self->maxmemory || $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_bytes' ) );
+        !$self->_maxmemory || ( $self->cleanup_bytes <= $self->maxmemory || $self->_throw( $E_MISMATCH_ARG, 'cleanup_bytes' ) );
     },
 );
 
-=head3 min_cleanup_items
+=head3 cleanup_items
 
 The minimum number of the collection elements to be realesed
 when performing memory cleanup. Default 100.
 
-The C<min_cleanup_items> attribute is designed to reduce number of times collection cleanup takes place.
+The C<cleanup_items> attribute is designed to reduce number of times collection cleanup takes place.
 Setting value too high may result in unwanted delays during operations with Redis.
 
-The C<min_cleanup_items> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The C<cleanup_items> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
 The method returns and sets the current value of the attribute.
 
 =cut
-has min_cleanup_items       => (
+has cleanup_items       => (
     is          => 'rw',
-    writer      => '_set_min_cleanup_items',
+    writer      => '_set_cleanup_items',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 100,
 );
@@ -2355,7 +2362,7 @@ argument.
 
 This argument are in key-value pair as described for L</create> method.
 
-An error exception is thrown (C<confess>) if an argument is not valid.
+An error exception is thrown (C<croak>) if an argument is not valid.
 
 =cut
 sub redis_config_ok {
@@ -2369,7 +2376,7 @@ sub redis_config_ok {
 Example:
 
     my $info = $coll->collection_info;
-    say 'An existing collection uses ', $info->{min_cleanup_bytes}, " byte of 'min_cleanup_bytes', ",
+    say 'An existing collection uses ', $info->{cleanup_bytes}, " byte of 'cleanup_bytes', ",
         $info->{items}, ' items are stored in ', $info->{lists}, ' lists';
     # or
     my $info = Redis::CappedCollection::collection_info(
@@ -2424,12 +2431,12 @@ C<memory_reserve> - Memory reserve coefficient.
 
 =item *
 
-C<min_cleanup_bytes> - The minimum size, in bytes,
+C<cleanup_bytes> - The minimum size, in bytes,
 of the data to be released when performing memory cleanup.
 
 =item *
 
-C<min_cleanup_items> - The minimum number of the collection elements
+C<cleanup_items> - The minimum number of the collection elements
 to be realesed when performing memory cleanup.
 
 =item *
@@ -2443,7 +2450,7 @@ or 0 if nothing was removed from collection yet.
 
 =back
 
-An error will cause the program to throw an exception (C<confess>) if an argument is not valid
+An error will cause the program to throw an exception (C<croak>) if an argument is not valid
 or the collection does not exist.
 
 =cut
@@ -2452,8 +2459,8 @@ my @_collection_info_result_keys = qw(
     lists
     items
     older_allowed
-    min_cleanup_bytes
-    min_cleanup_items
+    cleanup_bytes
+    cleanup_items
     memory_reserve
     data_version
     last_removed_time
@@ -2492,13 +2499,13 @@ sub collection_info {
         my %arguments = @_;
         _check_arguments_acceptability( \%arguments, [ 'redis', 'name' ] );
 
-        confess "'redis' argument is required"  unless defined $arguments{redis};
-        confess "'name' argument is required"   unless defined $arguments{name};
+        _croak( "'redis' argument is required" ) unless defined $arguments{redis};
+        _croak( "'name' argument is required" )  unless defined $arguments{name};
 
         my $redis   = _get_redis( delete $arguments{redis} );
         my $name    = delete $arguments{name};
 
-        confess( 'Unknown arguments: ', join( ', ', keys %arguments ) ) if %arguments;
+        _croak( 'Unknown arguments: ', join( ', ', keys %arguments ) ) if %arguments;
 
         @ret = _call_redis(
             $redis,
@@ -2511,7 +2518,7 @@ sub collection_info {
         my $error = $results->{error};
 
         if ( exists $ERROR{ $error } ) {
-            _confess( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) )
+            _croak( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) )
                 if $error != $E_NO_ERROR;
         } else {
             _unknown_error( @ret );
@@ -2593,7 +2600,7 @@ sub list_info {
 Get the time of the oldest data in the collection.
 Returns C<undef> if the collection does not contain data.
 
-An error exception is thrown (C<confess>) if the collection does not exist.
+An error exception is thrown (C<croak>) if the collection does not exist.
 
 =cut
 my @_oldest_time_result_keys = qw(
@@ -2676,7 +2683,7 @@ arguments.
 
 These arguments are in key-value pairs as described for L</create> method.
 
-An error exception is thrown (C<confess>) if an argument is not valid.
+An error exception is thrown (C<croak>) if an argument is not valid.
 
 =cut
 sub collection_exists {
@@ -2693,8 +2700,8 @@ sub collection_exists {
     _check_arguments_acceptability( \%arguments, [ 'redis', 'name' ] );
 
     unless ( $self ) {
-        confess "'redis' argument is required"  unless defined $arguments{redis};
-        confess "'name' argument is required"   unless defined $arguments{name};
+        _croak( "'redis' argument is required" ) unless defined $arguments{redis};
+        _croak( "'name' argument is required" )  unless defined $arguments{name};
     }
 
     $redis  = _get_redis( $arguments{redis} ) unless $self;
@@ -2744,7 +2751,7 @@ environments with extreme care. Its performance is not optimal for large collect
 This command is intended for debugging and special operations.
 Don't use C<lists> in your regular application code.
 
-In addition, it may cause an exception (C<confess>) if
+In addition, it may cause an exception (C<croak>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
 
@@ -2762,7 +2769,7 @@ sub lists {
         @keys = $self->_call_redis( 'KEYS', $self->_data_list_key( $pattern ) );
     } catch {
         my $error = $_;
-        _confess( $error ) unless $self->last_errorcode == $E_REDIS_DID_NOT_RETURN_DATA;
+        _croak( $error ) unless $self->last_errorcode == $E_REDIS_DID_NOT_RETURN_DATA;
     };
 
     return map { ( $_ =~ /:([^:]+)$/ )[0] } @keys;
@@ -2774,7 +2781,7 @@ sub lists {
 
 Example:
 
-    $coll->resize( min_cleanup_bytes => 100_000 );
+    $coll->resize( cleanup_bytes => 100_000 );
     my $redis = Redis->new( server => "$server:$port" );
     Redis::CappedCollection::resize( redis => $redis, name => 'Some name', older_allowed => 1 );
 
@@ -2788,12 +2795,12 @@ arguments.
 
 These arguments are in key-value pairs as described for L</create> method.
 
-It is possible to change the following parameters: C<older_allowed>, C<min_cleanup_bytes>,
-C<min_cleanup_items>, C<memory_reserve>. One or more parameters are required.
+It is possible to change the following parameters: C<older_allowed>, C<cleanup_bytes>,
+C<cleanup_items>, C<memory_reserve>. One or more parameters are required.
 
 Returns the number of completed changes.
 
-An error exception is thrown (C<confess>) if an argument is not valid or the
+An error exception is thrown (C<croak>) if an argument is not valid or the
 collection does not exist.
 
 =cut
@@ -2811,8 +2818,8 @@ sub resize {
     _check_arguments_acceptability( \%arguments, [ 'redis', 'name', @_status_parameters ] );
 
     unless ( $self ) {
-        confess "'redis' argument is required"  unless defined $arguments{redis};
-        confess "'name' argument is required"   unless defined $arguments{name};
+        _croak( "'redis' argument is required" ) unless defined $arguments{redis};
+        _croak( "'name' argument is required" )  unless defined $arguments{name};
     }
 
     $redis  = _get_redis( $arguments{redis} ) unless $self;
@@ -2827,19 +2834,19 @@ sub resize {
         if ( $self ) {
             $self->_throw( $E_MISMATCH_ARG, $error );
         } else {
-            confess format_message( '%s : %s', $error, $ERROR{ $E_MISMATCH_ARG } );
+            _croak( format_message( '%s : %s', $error, $ERROR{ $E_MISMATCH_ARG } ) );
         }
     }
 
     my $resized = 0;
     foreach my $parameter ( @_status_parameters ) {
         if ( exists $arguments{ $parameter } ) {
-            if ( $parameter eq 'min_cleanup_bytes' || $parameter eq 'min_cleanup_items' ) {
-                confess "'$parameter' must be nonnegative integer"
+            if ( $parameter eq 'cleanup_bytes' || $parameter eq 'cleanup_items' ) {
+                _croak( "'$parameter' must be nonnegative integer" )
                     unless _NONNEGINT( $arguments{ $parameter } );
             } elsif ( $parameter eq 'memory_reserve' ) {
                 my $memory_reserve = $arguments{ $parameter };
-                confess format_message( "'%s' must have a valid value", $parameter )
+                _croak( format_message( "'%s' must have a valid value", $parameter ) )
                     unless _NUMBER( $memory_reserve ) && $memory_reserve >= $MIN_MEMORY_RESERVE && $memory_reserve <= $MAX_MEMORY_RESERVE;
             } elsif ( $parameter eq 'older_allowed' ) {
                 $arguments{ $parameter } = $arguments{ $parameter } ? 1 :0;
@@ -2855,10 +2862,10 @@ sub resize {
 
             if ( $ret == 0 ) {   # 0 if field already exists in the hash and the value was updated
                 if ( $self ) {
-                    if ( $parameter eq 'min_cleanup_bytes' ) {
-                        $self->_set_min_cleanup_bytes( $new_val );
-                    } elsif ( $parameter eq 'min_cleanup_items' ) {
-                        $self->_set_min_cleanup_items( $new_val );
+                    if ( $parameter eq 'cleanup_bytes' ) {
+                        $self->_set_cleanup_bytes( $new_val );
+                    } elsif ( $parameter eq 'cleanup_items' ) {
+                        $self->_set_cleanup_items( $new_val );
                     } elsif ( $parameter eq 'memory_reserve' ) {
                         $self->_set_memory_reserve( $new_val );
                     } else {
@@ -2871,7 +2878,7 @@ sub resize {
                 if ( $self ) {
                     $self->_throw( $E_COLLECTION_DELETED, $msg );
                 } else {
-                    _confess( "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')' );
+                    _croak( "$msg (".$ERROR{ $E_COLLECTION_DELETED }.')' );
                 }
             }
         }
@@ -2905,11 +2912,11 @@ environments with extreme care. Its performance is not optimal for large collect
 This command is intended for debugging and special operations.
 Avoid using C<drop_collection> in your regular application code.
 
-C<drop_collection> mat throw an exception (C<confess>) if
+C<drop_collection> mat throw an exception (C<croak>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
 
-An error exception is thrown (C<confess>) if an argument is not valid.
+An error exception is thrown (C<croak>) if an argument is not valid.
 
 =cut
 sub drop_collection {
@@ -2936,8 +2943,8 @@ sub drop_collection {
         my %arguments = @_;
         _check_arguments_acceptability( \%arguments, [ 'redis', 'name' ] );
 
-        confess "'redis' argument is required"  unless defined $arguments{redis};
-        confess "'name' argument is required"   unless defined $arguments{name};
+        _croak( "'redis' argument is required" ) unless defined $arguments{redis};
+        _croak( "'name' argument is required" )  unless defined $arguments{name};
 
         my $redis   = _get_redis( $arguments{redis} );
         my $name    = $arguments{name};
@@ -3011,7 +3018,7 @@ environments with extreme care. Its performance is not optimal for large collect
 This command is intended for debugging and special operations.
 Avoid using C<clear_collection> in your regular application code.
 
-C<clear_collection> mat throw an exception (C<confess>) if
+C<clear_collection> mat throw an exception (C<croak>) if
 the collection contains a very large number of lists
 (C<'Error while reading from Redis server'>).
 
@@ -3179,7 +3186,7 @@ sub _check_arguments_acceptability {
         push @unlegal_arguments, $argument unless exists $legal_arguments{ $argument };
     }
 
-    confess( format_message( 'Unknown arguments: %s', \@unlegal_arguments ) ) if @unlegal_arguments;
+    _croak( format_message( 'Unknown arguments: %s', \@unlegal_arguments ) ) if @unlegal_arguments;
 
     return;
 }
@@ -3201,7 +3208,7 @@ sub _maxmemory_policy_ok {
         ( undef, $maxmemory_policy ) = $self->_call_redis( 'CONFIG', 'GET', 'maxmemory-policy' );
     } else {
         my $redis_argument = $arguments{redis};
-        confess "'redis' argument is required" unless defined( $redis_argument );
+        _croak( "'redis' argument is required" ) unless defined( $redis_argument );
         ( undef, $maxmemory_policy ) = _call_redis( _get_redis( $redis_argument ), 'CONFIG', 'GET', 'maxmemory-policy' )
     }
 
@@ -3211,7 +3218,7 @@ sub _maxmemory_policy_ok {
 sub _lists2hash {
     my ( $keys, $vals ) = @_;
 
-    confess $ERROR{ $E_MISMATCH_ARG }." for internal function '_lists2hash'"
+    _croak( $ERROR{ $E_MISMATCH_ARG }." for internal function '_lists2hash'" )
         unless _ARRAY( $keys ) && _ARRAY0( $vals ) && scalar( @$keys ) >= scalar( @$vals );
 
     my %hash;
@@ -3232,13 +3239,17 @@ sub _process_unknown_error {
 sub _unknown_error {
     my @args = @_;
 
-    _confess( format_message( '%s: %s', $ERROR{ $E_UNKNOWN_ERROR }, \@args ) );
+    _croak( format_message( '%s: %s', $ERROR{ $E_UNKNOWN_ERROR }, \@args ) );
 }
 
-sub _confess {
+sub _croak {
     my @args = @_;
 
-    confess @args;
+    if ( $DEBUG ) {
+        confess @args;
+    } else {
+        croak @args;
+    }
 }
 
 sub _make_data_key {
@@ -3332,24 +3343,24 @@ sub _verify_collection {
 
     $self->_set_last_errorcode( $E_NO_ERROR );
 
-    my ( $status_exist, $older_allowed, $min_cleanup_bytes, $min_cleanup_items, $memory_reserve, $data_version ) = $self->_call_redis(
+    my ( $status_exist, $older_allowed, $cleanup_bytes, $cleanup_items, $memory_reserve, $data_version ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
         0,
         $self->name,
         $self->older_allowed ? 1 : 0,
-        $self->min_cleanup_bytes || 0,
-        $self->min_cleanup_items || 0,
+        $self->cleanup_bytes || 0,
+        $self->cleanup_items || 0,
         $self->memory_reserve || $MIN_MEMORY_RESERVE,
         );
 
     if ( $status_exist ) {
-        $self->min_cleanup_bytes( $min_cleanup_bytes )  unless $self->min_cleanup_bytes;
-        $self->min_cleanup_items( $min_cleanup_items )  unless $self->min_cleanup_items;
-        $older_allowed      == $self->older_allowed     or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
-        $min_cleanup_bytes  == $self->min_cleanup_bytes or $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_bytes' );
-        $min_cleanup_items  == $self->min_cleanup_items or $self->_throw( $E_MISMATCH_ARG, 'min_cleanup_items' );
-        $memory_reserve     == $self->memory_reserve    or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
-        $data_version       == $DATA_VERSION            or $self->_throw( $E_INCOMP_DATA_VERSION );
+        $self->cleanup_bytes( $cleanup_bytes )  unless $self->cleanup_bytes;
+        $self->cleanup_items( $cleanup_items )  unless $self->cleanup_items;
+        $older_allowed  == $self->older_allowed     or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
+        $cleanup_bytes  == $self->cleanup_bytes     or $self->_throw( $E_MISMATCH_ARG, 'cleanup_bytes' );
+        $cleanup_items  == $self->cleanup_items     or $self->_throw( $E_MISMATCH_ARG, 'cleanup_items' );
+        $memory_reserve == $self->memory_reserve    or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
+        $data_version   == $DATA_VERSION            or $self->_throw( $E_INCOMP_DATA_VERSION );
     }
 }
 
@@ -3391,10 +3402,10 @@ sub _throw {
 
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
-        _confess( format_message( '%s%s', ( $prefix ? "$prefix : " : '' ), $ERROR{ $err } ) );
+        _croak( format_message( '%s%s', ( $prefix ? "$prefix : " : '' ), $ERROR{ $err } ) );
     } else {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-        _confess( format_message( '%s: %s%s', $ERROR{ $E_UNKNOWN_ERROR }, ( $prefix ? "$prefix : " : '' ), format_message( '%s', $err ) ) );
+        _croak( format_message( '%s: %s%s', $ERROR{ $E_UNKNOWN_ERROR }, ( $prefix ? "$prefix : " : '' ), format_message( '%s', $err ) ) );
     }
 }
 
@@ -3474,7 +3485,7 @@ sub _throw {
         if ( $error =~ /\] ERR Error (?:running|compiling) script/ ) {
             $error .= "\nLua script '$_running_script_name':\n$_running_script_body";
         }
-        _confess( format_message( '%s %s', $error, $err_msg ) );
+        _croak( format_message( '%s %s', $error, $err_msg ) );
     }
 }
 
@@ -3502,12 +3513,12 @@ sub _redis_constructor {
             $redis = $self->_redis;
         }
     } else {                                        # allow calling Foo::bar
-        $redis_parameters = _HASH0( shift ) or confess $ERROR{ $E_MISMATCH_ARG };
+        $redis_parameters = _HASH0( shift ) or _croak( $ERROR{ $E_MISMATCH_ARG } );
         $redis = try {
             Redis->new( %$redis_parameters );
         } catch {
             my $error = $_;
-            confess format_message( "'Redis' exception: %s; (redis_parameters = %s)", $error, _parameters_2_str( $redis_parameters ) );
+            _croak( format_message( "'Redis' exception: %s; (redis_parameters = %s)", $error, _parameters_2_str( $redis_parameters ) ) );
         };
     }
 
@@ -3535,7 +3546,7 @@ sub _call_redis {
 
         if ( $self->reconnect_on_error && !$self->ping ) {
             my $err_msg = $self->_reconnect();
-            _confess( format_message( '%s: %s', $ERROR{$E_REDIS}, $err_msg ) ) if $err_msg;
+            _croak( format_message( '%s: %s', $ERROR{$E_REDIS}, $err_msg ) ) if $err_msg;
         }
 
         $redis = $self->_redis;
@@ -3562,7 +3573,7 @@ sub _call_redis {
     unless ( scalar @return ) {
         $self->_set_last_errorcode( $E_REDIS_DID_NOT_RETURN_DATA )
             if $self;
-        confess $ERROR{ $E_REDIS_DID_NOT_RETURN_DATA };
+        _croak( $ERROR{ $E_REDIS_DID_NOT_RETURN_DATA } );
     }
 
     return wantarray ? @return : $return[0];
@@ -3583,7 +3594,7 @@ __PACKAGE__->meta->make_immutable();
 =head2 DIAGNOSTICS
 
 All recognizable errors in C<Redis::CappedCollection> set corresponding value
-into the L</last_errorcode> and throw an exception (C<confess>).
+into the L</last_errorcode> and throw an exception (C<croak>).
 Unidentified errors also throw exceptions but L</last_errorcode> is not set.
 
 In addition to errors in the L<Redis|Redis> module, detected errors are
@@ -3606,6 +3617,10 @@ Piece of code wrapped in C<eval {...};> and analyze L</last_errorcode>
 (look at the L</"An Example"> section).
 
 =back
+
+=head2 Debug mode
+
+An error exception is thrown with C<confess> if the package variable C<$DEBUG> set to true.
 
 =head2 An Example
 
@@ -3719,7 +3734,7 @@ An example of error handling.
     my ( $lists, $items );
     eval {
         my $info = $coll->collection_info;
-        say 'An existing collection uses ', $info->{min_cleanup_bytes}, " byte of 'min_cleanup_bytes', ",
+        say 'An existing collection uses ', $info->{cleanup_bytes}, " byte of 'cleanup_bytes', ",
             'in ', $info->{items}, ' items are placed in ',
             $info->{lists}, ' lists';
 
@@ -3765,9 +3780,9 @@ CappedCollection package creates the following data structures on Redis:
     4) "1"                  # the key value
     5) "older_allowed"      # hash key
     6) "0"                  # the key value
-    7) "min_cleanup_bytes"  # hash key
+    7) "cleanup_bytes"      # hash key
     8) "0"                  # the key value
-    9) "min_cleanup_items"  # hash key
+    9) "cleanup_items"      # hash key
     10) "100"               # the key value
     11) "memory_reserve"    # hash key
     12) "0.05"              # the key value

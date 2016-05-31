@@ -51,8 +51,8 @@ const my $FILLER                => '#';
 
 #-- Collection settings
 const my $COLLECTION_NAME       => $FILLER x 40;
-const my $MIN_CLEANUP_BYTES     => 1 * 1024;
-const my $MIN_CLEANUP_ITEMS     => 10;
+const my $CLEANUP_BYTES         => 1 * 1024;
+const my $CLEANUP_ITEMS         => 10;
 const my $MAX_DATASIZE          => 4 * 1024;    # 4k
 const my $OLDER_ALLOWED         => 0;
 const my $CHECK_MAXMEMORY       => 1;
@@ -106,12 +106,12 @@ sub get_collection {
     isa_ok( $REDIS_SERVER, 'Test::RedisServer' );
 
     $COLLECTION = Redis::CappedCollection->create(
-        redis                   => $REDIS_SERVER,
-        name                    => $COLLECTION_NAME,
-        'older_allowed'         => $OLDER_ALLOWED,
-        'min_cleanup_bytes'     => $MIN_CLEANUP_BYTES,
-        'min_cleanup_items'     => $MIN_CLEANUP_ITEMS,
-        memory_reserve          => $MEMORY_RESERVE,
+        redis           => $REDIS_SERVER,
+        name            => $COLLECTION_NAME,
+        'older_allowed' => $OLDER_ALLOWED,
+        'cleanup_bytes' => $CLEANUP_BYTES,
+        'cleanup_items' => $CLEANUP_ITEMS,
+        memory_reserve  => $MEMORY_RESERVE,
     );
     isa_ok( $COLLECTION, 'Redis::CappedCollection' );
 

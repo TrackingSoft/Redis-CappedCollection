@@ -1,5 +1,15 @@
 Revision history for Redis::CappedCollection module
 
+    CHANGES:
+    - Now we use 'croak' instead 'confess'.
+    - 'min_cleanup_bytes' and 'min_cleanup_items' renamed to
+      'cleanup_bytes' and 'cleanup_items'.
+    - $DEFAULT_MIN_CLEANUP_BYTES, $DEFAULT_MIN_CLEANUP_ITEMS renamed to
+      $DEFAULT_CLEANUP_BYTES, $DEFAULT_CLEANUP_ITEMS .
+
+    BUGFIXES:
+    - Data::Dumper 'Sparseseen' method not used now.
+
 1.08  Fri May  06 2016
     FIXES:
     - Tests corrected.

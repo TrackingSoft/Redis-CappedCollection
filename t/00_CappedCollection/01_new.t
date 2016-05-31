@@ -93,12 +93,12 @@ $status_key  = $NAMESPACE.':S:'.$coll->name;
 $queue_key   = $NAMESPACE.':Q:'.$coll->name;
 ok $coll->_call_redis( "EXISTS", $status_key ), "status hash created";
 ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
-ok $coll->_call_redis( "HEXISTS", $status_key, 'min_cleanup_bytes' ), "status field created";
-ok $coll->_call_redis( "HEXISTS", $status_key, 'min_cleanup_items' ), "status field created";
+ok $coll->_call_redis( "HEXISTS", $status_key, 'cleanup_bytes' ), "status field created";
+ok $coll->_call_redis( "HEXISTS", $status_key, 'cleanup_items' ), "status field created";
 ok $coll->_call_redis( "HEXISTS", $status_key, 'memory_reserve' ), "status field created";
 ok $coll->_call_redis( "HEXISTS", $status_key, 'lists' ), "status field created";
-is $coll->_call_redis( "HGET", $status_key, 'min_cleanup_bytes' ), $coll->min_cleanup_bytes, "correct status value";
-is $coll->_call_redis( "HGET", $status_key, 'min_cleanup_items' ), $coll->min_cleanup_items, "correct status value";
+is $coll->_call_redis( "HGET", $status_key, 'cleanup_bytes' ), $coll->cleanup_bytes, "correct status value";
+is $coll->_call_redis( "HGET", $status_key, 'cleanup_items' ), $coll->cleanup_items, "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'memory_reserve' ), $coll->memory_reserve, "correct status value";
 is $coll->_call_redis( "HGET", $status_key, 'lists' ), 0, "correct status value";
 
