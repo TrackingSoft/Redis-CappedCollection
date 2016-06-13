@@ -38,11 +38,11 @@ my %config = (
         provides                => {
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
-                version                     => '1.08'
+                version                     => '1.09'
             },
             'Redis::CappedCollection::Util' => {
                 file                        => 'lib/Redis/CappedCollection/Util.pm',
-                version                     => '1.08'
+                version                     => '1.09'
             },
         },
         'meta-spec'             => { version => 2 },
