@@ -108,10 +108,17 @@ ok $coll_1->name ne $coll_2->name, "new UUID";
 
 my $open_coll1 = Redis::CappedCollection->open( redis => $coll_1->_redis, name => $coll_1->name );
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
+ok !$open_coll1->reconnect_on_error, 'no reconnect_on_error';
+is $open_coll1->connection_timeout, undef, $msg;
+is $open_coll1->operation_timeout, undef, $msg;
 $open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name );
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
+ok !$open_coll1->reconnect_on_error, 'no reconnect_on_error';
+is $open_coll1->connection_timeout, $DEFAULT_CONNECTION_TIMEOUT, 'set connection_timeout';
+is $open_coll1->operation_timeout, $DEFAULT_OPERATION_TIMEOUT, 'set operation_timeout';
 $open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name, reconnect_on_error => 1 );
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
+ok $open_coll1->reconnect_on_error, 'reconnect_on_error';
 $open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name, connection_timeout => $DEFAULT_CONNECTION_TIMEOUT );
 ok $open_coll1->name eq $coll_1->name, "correct UUID";
 $open_coll1 = Redis::CappedCollection->open( redis => { server => $coll_1->_server }, name => $coll_1->name, operation_timeout => $DEFAULT_OPERATION_TIMEOUT );

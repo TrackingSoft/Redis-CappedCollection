@@ -1487,6 +1487,7 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # When you add or modify the data trying to ensure
                         # reserve of free memory for metadata and bookkeeping.
         reconnect_on_error  => 0,   # Controls ability to force re-connection with Redis on error.
+                        # Boolean argument (default is false).
         connection_timeout  => $DEFAULT_CONNECTION_TIMEOUT,    # Socket timeout for connection,
                         # number of seconds (can be fractional).
                         # NOTE: Changes external socket configuration.
@@ -1534,13 +1535,7 @@ sub BUILD {
     } else {    # $redis is hash ref
         $self->_server( $redis->{server} // "$DEFAULT_SERVER:$DEFAULT_PORT" );
 
-        # defaults for the case when the Redis object we create
-        $redis->{reconnect}                 = 0     unless exists $redis->{reconnect};
-        $redis->{every}                     = 1000  unless exists $redis->{every};                  # 1 ms
-        $redis->{conservative_reconnect}    = 0     unless exists $redis->{conservative_reconnect};
-        $redis->{cnx_timeout}               = $DEFAULT_CONNECTION_TIMEOUT  unless exists $redis->{cnx_timeout};
-        $redis->{read_timeout}              = $DEFAULT_OPERATION_TIMEOUT   unless exists $redis->{read_timeout};
-        $redis->{write_timeout}             = $DEFAULT_OPERATION_TIMEOUT   unless exists $redis->{write_timeout};
+        $self->_redis_setup( $redis );
 
         $self->_redis( $self->_redis_constructor( $redis ) );
         $self->_use_external_connection( 0 );
@@ -1665,11 +1660,16 @@ sub open {
         my $info = collection_info( redis => $redis, name => $name );
         $info->{data_version} == $DATA_VERSION or _croak( $ERROR{ $E_INCOMP_DATA_VERSION } );
         $params{ $_ } = $info->{ $_ } foreach @_status_parameters;
-        return $class->new( %params,
+        my $collection = $class->new( %params,
             _create_from_naked_new      => 0,
             _create_from_open           => 1,
             _use_external_connection    => $use_external_connection,
         );
+        unless ( $use_external_connection ) {
+            $collection->connection_timeout( $redis->{cnx_timeout} );
+            $collection->operation_timeout( $redis->{read_timeout} );
+        }
+        return $collection;
     } else {
         _croak( format_message( "Collection '%s' does not exist", $name ) );
     };
@@ -3503,6 +3503,7 @@ sub _redis_constructor {
 
         if ( _HASH0( $redis_parameters ) ) {
             $self->_set_last_errorcode( $E_NO_ERROR );
+            $self->_redis_setup( $redis_parameters );
             $redis = try {
                 Redis->new( %$redis_parameters );
             } catch {
@@ -3514,6 +3515,7 @@ sub _redis_constructor {
         }
     } else {                                        # allow calling Foo::bar
         $redis_parameters = _HASH0( shift ) or _croak( $ERROR{ $E_MISMATCH_ARG } );
+        _redis_setup( $redis_parameters );
         $redis = try {
             Redis->new( %$redis_parameters );
         } catch {
@@ -3523,6 +3525,28 @@ sub _redis_constructor {
     }
 
     return $redis;
+}
+
+sub _redis_setup {
+    my $self;
+    if ( @_ && _INSTANCE( $_[0], __PACKAGE__ ) ) {  # allow calling $obj->bar
+        $self = shift;
+    }
+    my $conf = shift;
+
+    # defaults for the case when the Redis object we create
+    $conf->{reconnect}              = 0     unless exists $conf->{reconnect};
+    $conf->{every}                  = 1000  unless exists $conf->{every};                   # 1 ms
+    $conf->{conservative_reconnect} = 0     unless exists $conf->{conservative_reconnect};
+
+    $conf->{cnx_timeout}    = $conf->{cnx_timeout}  || ( $self ? $self->connection_timeout : undef ) || $DEFAULT_CONNECTION_TIMEOUT;
+    $conf->{read_timeout}   = $conf->{read_timeout} || ( $self ? $self->operation_timeout : undef )  || $DEFAULT_OPERATION_TIMEOUT;
+    $conf->{write_timeout}  = $conf->{read_timeout};
+
+    if ( $self ) {
+        $self->connection_timeout( $conf->{cnx_timeout} );
+        $self->operation_timeout( $conf->{read_timeout} );
+    }
 }
 
 sub _parameters_2_str {

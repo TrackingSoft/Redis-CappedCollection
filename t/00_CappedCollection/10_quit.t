@@ -98,10 +98,25 @@ $coll_1 = Redis::CappedCollection->open(
     name    => "Some name",
     );
 isa_ok( $coll_1, 'Redis::CappedCollection' );
+ok !$coll_1->reconnect_on_error, 'reconnect_on_error FALSE';
 
 ok $coll_1->_redis->ping, "server is available";
 $coll_1->quit;
 ok !$coll_1->_redis->ping, "no server";
+
+#-- reconnect
+$coll_1 = Redis::CappedCollection->open(
+    redis               => { $redis->connect_info },
+    name                => "Some name",
+    reconnect_on_error  => 1,
+);
+isa_ok( $coll_1, 'Redis::CappedCollection' );
+ok $coll_1->reconnect_on_error, 'reconnect_on_error TRUE';
+ok $coll_1->_redis->ping, "server is available";
+$coll_1->quit;
+ok !$coll_1->_redis->ping, "no server";
+$info = $coll_1->collection_info;
+ok $coll_1->_redis->ping, "server reconnected";
 
 my $coll_2 = Redis::CappedCollection->create(
     redis   => $redis,

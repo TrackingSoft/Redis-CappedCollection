@@ -1,5 +1,9 @@
 Revision history for Redis::CappedCollection module
 
+    FIXES:
+    - Obey 'connection_timeout', 'operation_timeout' attributes of redis connection hash.
+    - Tests refined.
+
 1.09  Tue Jun  14 2016
     CHANGES:
     - Now we use 'croak' instead 'confess'.

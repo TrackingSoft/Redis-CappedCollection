@@ -36,6 +36,7 @@ use Data::UUID;
 use Params::Util qw(
     _NUMBER
 );
+use POSIX qw();
 use Time::HiRes ();
 
 use Redis::CappedCollection qw(
@@ -227,10 +228,22 @@ sub test_insert {
             ok $new_AFTER_last_cleanup_bytes <= $AFTER_last_cleanup_bytes, 'last_cleanup_bytes';
         }
     } else {
-        is $INSIDE_cleanings, 0, 'no cleanings';
-        is $new_AFTER_info->{last_removed_time}, $AFTER_info->{last_removed_time}, 'last_removed_time not changed';
-        is $new_AFTER_last_cleanup_bytes, $AFTER_last_cleanup_bytes, 'last_cleanup_bytes changed by data length';
-        is $new_AFTER_info->{items}, $AFTER_info->{items} + 1, 'item added ones';
+        my $cleanup_bytes_items = POSIX::ceil( $cleanup_bytes / $data_length );
+        my $max_cleanings = $cleanup_items > $cleanup_bytes_items
+            ? $cleanup_items
+            : $cleanup_bytes_items
+        ;
+
+        if ( $INSIDE_cleanings ) {
+            is $INSIDE_cleanings, $max_cleanings, 'max cleanings';
+            ok $new_AFTER_info->{last_removed_time} > $AFTER_info->{last_removed_time}, 'last_removed_time changed';
+            is $new_AFTER_info->{items}, $AFTER_info->{items} - $max_cleanings + 1, 'item added ones';
+       } else {
+            is $INSIDE_cleanings, 0, 'no cleanings';
+            is $new_AFTER_info->{last_removed_time}, $AFTER_info->{last_removed_time}, 'last_removed_time not changed';
+            is $new_AFTER_last_cleanup_bytes, $AFTER_last_cleanup_bytes, 'last_cleanup_bytes changed by data length';
+            is $new_AFTER_info->{items}, $AFTER_info->{items} + 1, 'item added ones';
+        }
     }
     ok $expected_used_memory <= $MAX_DATA_BYTES_AVAILABLE, 'no excess data';
 
@@ -246,6 +259,8 @@ sub get_used_memory {
     my $redis_memory_info = $REDIS->info( 'memory' );
     return $redis_memory_info->{used_memory};
 }
+
+my $redis_version;
 
 sub new_connection {
     my %args = @_;
@@ -280,6 +295,12 @@ sub new_connection {
 
     $REDIS = $COLLECTION->_redis;
     isa_ok( $REDIS, 'Redis' );
+
+    unless ( $redis_version ) {
+        my $redis_server_info = $REDIS->info( 'server' );
+        $redis_version = $redis_server_info->{redis_version};
+        diag "redis version: $redis_version";
+    }
 
     $STATUS_KEY = "$NAMESPACE:S:".$COLLECTION->name;
     ok $COLLECTION->_call_redis( 'EXISTS', $STATUS_KEY ), 'status hash created';
