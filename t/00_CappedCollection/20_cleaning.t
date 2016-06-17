@@ -4,7 +4,6 @@
 # - with maxmemory = 0
 # - $E_NONEXISTENT_DATA_ID error
 
-
 use 5.010;
 use strict;
 use warnings;

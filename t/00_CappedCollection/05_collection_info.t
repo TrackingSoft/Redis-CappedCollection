@@ -47,7 +47,6 @@ use Redis::CappedCollection::Test::Utils qw(
 # options for testing arguments: ( undef, 0, 0.5, 1, -1, -3, "", "0", "0.5", "1", 9999999999999999, \"scalar", [], $uuid )
 
 my ( $redis, $skip_msg, $port ) = verify_redis();
-
 SKIP: {
     diag $skip_msg if $skip_msg;
     skip( $skip_msg, 1 ) if $skip_msg;

@@ -2004,7 +2004,7 @@ sub insert {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
-            $self->_clear_sha1;
+            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } elsif (
                    $error == $E_DATA_ID_EXISTS
@@ -2012,6 +2012,7 @@ sub insert {
             ) {
             $self->_throw( $error );
         } else {
+            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2115,9 +2116,10 @@ sub update {
                 || $error == $E_DATA_ID_EXISTS
                 || $error == $E_OLDER_THAN_ALLOWED
             ) {
-            $self->_clear_sha1;
+            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } else {
+            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2181,7 +2183,7 @@ sub upsert {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
-            $self->_clear_sha1;
+            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } elsif (
                    $error == $E_DATA_ID_EXISTS
@@ -2191,6 +2193,7 @@ sub upsert {
         } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
             # Nothing to do
         } else {
+            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2321,7 +2324,7 @@ sub pop_oldest {
     my ( $error, $queue_exist, $to_delete_id, $to_delete_data ) = @ret;
 
     if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -2488,7 +2491,7 @@ sub collection_info {
         my $error = $results->{error};
 
         if ( exists $ERROR{ $error } ) {
-            $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+            _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
             $self->_throw( $error ) if $error != $E_NO_ERROR;
         } else {
             $self->_process_unknown_error( @ret );
@@ -2518,8 +2521,10 @@ sub collection_info {
         my $error = $results->{error};
 
         if ( exists $ERROR{ $error } ) {
-            _croak( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) )
-                if $error != $E_NO_ERROR;
+            if ( $error != $E_NO_ERROR ) {
+                _clear_sha1( $redis );
+                _croak( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) );
+            }
         } else {
             _unknown_error( @ret );
         }
@@ -2580,7 +2585,7 @@ sub list_info {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -2623,7 +2628,7 @@ sub oldest_time {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -2936,7 +2941,7 @@ sub drop_collection {
         );
 
         $self->_clear_name;
-        $self->_clear_sha1;
+        _clear_sha1( $self->_redis );
     } else {
         shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
 
@@ -2955,6 +2960,7 @@ sub drop_collection {
             0,
             $name,
         );
+        _clear_sha1( $redis );
     }
 
     return $ret;
@@ -2996,7 +3002,7 @@ sub drop_list {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        $self->_clear_sha1 if $error == $E_COLLECTION_DELETED;
+        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -3091,7 +3097,7 @@ sub quit {
     return if $] >= 5.14 && ${^GLOBAL_PHASE} eq 'DESTRUCT';
 
     $self->_set_last_errorcode( $E_NO_ERROR );
-    $self->_clear_sha1;
+    _clear_sha1( $self->_redis );
     unless ( $self->_use_external_connection ) {
         try {
             $self->_redis->quit;
@@ -3233,7 +3239,7 @@ sub _process_unknown_error {
     my ( $self, @args ) = @_;
 
     $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
-    _unknown_error( @args, $self->reconnect_on_error ? $self->_reconnect( $E_UNKNOWN_ERROR ) : () );
+    _unknown_error( @args, $self->reconnect_on_error ? _reconnect( $self->_redis, $E_UNKNOWN_ERROR ) : () );
 }
 
 sub _unknown_error {
@@ -3298,7 +3304,7 @@ sub _long_term_operation {
             if ( $error == $E_NO_ERROR ) {
                 # Normal result: Nothing to do
             } elsif ( $error == $E_COLLECTION_DELETED ) {
-                $self->_clear_sha1;
+                _clear_sha1( $self->_redis );
                 $self->_throw( $error );
             } elsif (
                        $error == $E_DATA_ID_EXISTS
@@ -3306,6 +3312,7 @@ sub _long_term_operation {
                 ) {
                 $self->_throw( $error );
             } else {
+                _clear_sha1( $self->_redis );
                 $self->_throw( $error, 'Unexpected error' );
             }
         } else {
@@ -3365,7 +3372,7 @@ sub _verify_collection {
 }
 
 sub _reconnect {
-    my $self    = shift;
+    my $redis   = shift;
     my $err     = shift // 0;
     my $msg     = shift;
 
@@ -3379,10 +3386,11 @@ sub _reconnect {
             )
         ) {
         try {
-            $self->_redis->connect;
+            $redis->connect;
         } catch {
             my $error = $_;
             $err_msg = "(Not reconnected: $error)";
+            _clear_sha1( $redis );
         };
     }
 
@@ -3398,7 +3406,7 @@ sub _reconnect {
 sub _throw {
     my ( $self, $err, $prefix ) = @_;
 
-    $prefix = $self->_reconnect( $err, $prefix ) if $self->reconnect_on_error;
+    $prefix = _reconnect( $self->_redis, $err, $prefix ) if $self->reconnect_on_error;
 
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
@@ -3458,14 +3466,14 @@ sub _throw {
                 $self->_set_last_errorcode( $E_NETWORK );
 
                 # For connection problem
-                $err_msg = $self->_reconnect( $E_UNKNOWN_ERROR, $err_msg ) if $self->reconnect_on_error;
+                $err_msg = _reconnect( $self->_redis, $E_UNKNOWN_ERROR, $err_msg ) if $self->reconnect_on_error;
             } elsif (
                        $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_MEMORY_ERROR_MSG\E/i
                     || $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_ERROR_CODE $ERROR{ $E_MAXMEMORY_LIMIT }\E/i
                     || $error =~ /^\[[^]]+\]\s+-NOSCRIPT No matching script. Please use EVAL./
                 ) {
                 $self->_set_last_errorcode( $E_MAXMEMORY_LIMIT );
-                $self->_clear_sha1;
+                _clear_sha1( $self->_redis );
 
                 # No connection problem
             } elsif ( $error =~ /^\[[^]]+\]\s+BUSY Redis is busy running a script/ ){
@@ -3476,7 +3484,7 @@ sub _throw {
                 $self->_set_last_errorcode( $E_REDIS );
 
                 # For possible connection problems
-                $err_msg = $self->_reconnect( $E_UNKNOWN_ERROR, $err_msg ) if $self->reconnect_on_error;
+                $err_msg = _reconnect( $self->_redis, $E_UNKNOWN_ERROR, $err_msg ) if $self->reconnect_on_error;
             }
         } else {
             # nothing to do now
@@ -3490,9 +3498,9 @@ sub _throw {
 }
 
 sub _clear_sha1 {
-    my ( $self ) = @_;
+    my ( $redis ) = @_;
 
-    delete( $_lua_scripts->{ $self->_redis } ) if $self->_redis;
+    delete( $_lua_scripts->{ $redis } ) if $redis;
 }
 
 sub _redis_constructor {
@@ -3569,7 +3577,7 @@ sub _call_redis {
         $self = shift;
 
         if ( $self->reconnect_on_error && !$self->ping ) {
-            my $err_msg = $self->_reconnect();
+            my $err_msg = _reconnect( $self->_redis );
             _croak( format_message( '%s: %s', $ERROR{$E_REDIS}, $err_msg ) ) if $err_msg;
         }
 
