@@ -3448,7 +3448,7 @@ sub _throw {
         if ( $self ) {
             # Use the error messages from Redis.pm
             if (
-                       $error =~ /^Could not connect to Redis server at /
+                       $error =~ /Could not connect to Redis server at /    # not in start if not reconnected
                     || $error =~ /^Can't close socket: /
                     || $error =~ /^Not connected to any server/
                     # Maybe for pub/sub only
