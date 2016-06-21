@@ -1580,6 +1580,8 @@ sub BUILD {
     $self->_time_keys(  $NAMESPACE.':T:'.$self->name );
 
     $self->_verify_collection unless $self->_create_from_open;
+
+    return;
 }
 
 #-- public attributes ----------------------------------------------------------
@@ -1672,7 +1674,9 @@ sub open {
         return $collection;
     } else {
         _croak( format_message( "Collection '%s' does not exist", $name ) );
-    };
+    }
+
+    return;
 }
 
 =head2 METHODS
@@ -1747,6 +1751,8 @@ sub _connection_timeout_trigger {
         # not for reading / writing operations.
         $socket->timeout( $redis->{cnx_timeout} = $timeout );
     }
+
+    return;
 }
 
 =head3 operation_timeout
@@ -1783,6 +1789,8 @@ sub _operation_timeout_trigger {
             $socket->disable_timeout;
         }
     }
+
+    return;
 }
 
 =head3 cleanup_bytes
@@ -2125,6 +2133,8 @@ sub update {
     } else {
         $self->_process_unknown_error( @ret );
     }
+
+    return;
 }
 
 =head3 upsert
@@ -2288,6 +2298,8 @@ sub receive {
             );
         }
     }
+
+    return;
 }
 
 =head3 pop_oldest
@@ -3240,12 +3252,16 @@ sub _process_unknown_error {
 
     $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
     _unknown_error( @args, $self->reconnect_on_error ? _reconnect( $self->_redis, $E_UNKNOWN_ERROR ) : () );
+
+    return;
 }
 
 sub _unknown_error {
     my @args = @_;
 
     _croak( format_message( '%s: %s', $ERROR{ $E_UNKNOWN_ERROR }, \@args ) );
+
+    return;
 }
 
 sub _croak {
@@ -3256,6 +3272,8 @@ sub _croak {
     } else {
         croak @args;
     }
+
+    return;
 }
 
 sub _make_data_key {
@@ -3369,6 +3387,8 @@ sub _verify_collection {
         $memory_reserve == $self->memory_reserve    or $self->_throw( $E_MISMATCH_ARG, 'memory_reserve' );
         $data_version   == $DATA_VERSION            or $self->_throw( $E_INCOMP_DATA_VERSION );
     }
+
+    return;
 }
 
 sub _reconnect {
@@ -3415,6 +3435,8 @@ sub _throw {
         $self->_set_last_errorcode( $E_UNKNOWN_ERROR );
         _croak( format_message( '%s: %s%s', $ERROR{ $E_UNKNOWN_ERROR }, ( $prefix ? "$prefix : " : '' ), format_message( '%s', $err ) ) );
     }
+
+    return;
 }
 
 {
@@ -3494,6 +3516,8 @@ sub _throw {
             $error .= "\nLua script '$_running_script_name':\n$_running_script_body";
         }
         _croak( format_message( '%s %s', $error, $err_msg ) );
+
+        return;
     }
 }
 
@@ -3501,6 +3525,8 @@ sub _clear_sha1 {
     my ( $redis ) = @_;
 
     delete( $_lua_scripts->{ $redis } ) if $redis;
+
+    return;
 }
 
 sub _redis_constructor {
@@ -3555,6 +3581,8 @@ sub _redis_setup {
         $self->connection_timeout( $conf->{cnx_timeout} );
         $self->operation_timeout( $conf->{read_timeout} );
     }
+
+    return;
 }
 
 sub _parameters_2_str {
