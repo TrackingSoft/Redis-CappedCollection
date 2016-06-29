@@ -74,6 +74,10 @@ SKIP: {
 isa_ok( $redis_server, 'Test::RedisServer' );
 isa_ok( $redis, 'Redis' );
 
+my $redis_server_info = $redis->info( 'server' );
+my $redis_version = $redis_server_info->{redis_version};
+diag "redis-server version: $redis_version";
+
 my ( $coll, $name, $tmp, $status_key, $queue_key );
 my $uuid = new Data::UUID;
 my $msg = "attribute is set correctly";

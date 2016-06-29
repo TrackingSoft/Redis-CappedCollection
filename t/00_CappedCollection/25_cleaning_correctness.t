@@ -260,8 +260,6 @@ sub get_used_memory {
     return $redis_memory_info->{used_memory};
 }
 
-my $redis_version;
-
 sub new_connection {
     my %args = @_;
 
@@ -295,12 +293,6 @@ sub new_connection {
 
     $REDIS = $COLLECTION->_redis;
     isa_ok( $REDIS, 'Redis' );
-
-    unless ( $redis_version ) {
-        my $redis_server_info = $REDIS->info( 'server' );
-        $redis_version = $redis_server_info->{redis_version};
-        diag "redis version: $redis_version";
-    }
 
     $STATUS_KEY = "$NAMESPACE:S:".$COLLECTION->name;
     ok $COLLECTION->_call_redis( 'EXISTS', $STATUS_KEY ), 'status hash created';

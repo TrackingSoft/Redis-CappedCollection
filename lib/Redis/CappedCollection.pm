@@ -3081,12 +3081,7 @@ sub ping {
 
     $self->_set_last_errorcode( $E_NO_ERROR );
 
-    my $ret;
-    try {
-        $ret = $self->_redis->ping;
-    } catch {
-        $self->_redis_exception( $_ );
-    };
+    my $ret = $self->_redis->ping;
 
     return( ( $ret // '<undef>' ) eq 'PONG' ? 1 : 0 );
 }
@@ -3110,13 +3105,7 @@ sub quit {
 
     $self->_set_last_errorcode( $E_NO_ERROR );
     _clear_sha1( $self->_redis );
-    unless ( $self->_use_external_connection ) {
-        try {
-            $self->_redis->quit;
-        } catch {
-            $self->_redis_exception( $_ );
-        };
-    }
+    $self->_redis->quit unless $self->_use_external_connection;
 
     return;
 }
@@ -3406,6 +3395,7 @@ sub _reconnect {
             )
         ) {
         try {
+            $redis->quit;
             $redis->connect;
         } catch {
             my $error = $_;
