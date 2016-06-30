@@ -3072,7 +3072,7 @@ If there is no connection to the Redis server (methods return 0), the connection
 In this case, to continue working with the collection,
 you must re-create the C<Redis::CappedCollection> object with the L</open> method.
 When using an external connection to the server,
-to check the connection to the server you can use the C<$redis->echo( ... )> call.
+to check the connection to the server you can use the C<$redis-E<gt>echo( ... )> call.
 This is useful to avoid closing the connection to the Redis server unintentionally.
 
 =cut
@@ -3094,8 +3094,8 @@ Close the connection with the redis server.
 
 It does not close the connection to the Redis server if it is an external connection provided
 to collection constructor as existing L<Redis> object.
-When using an external connection (eg, C<$redis = Redis-> new (...);>),
-to close the connection to the Redis server, call C<$redis->quit> after calling this method.
+When using an external connection (eg, C<$redis = Redis-E<gt>new (...);>),
+to close the connection to the Redis server, call C<$redis-E<gt>quit> after calling this method.
 
 =cut
 sub quit {

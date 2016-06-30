@@ -72,6 +72,7 @@ SKIP: {
 }
 
 sub test_timeout {
+    pass '>> test_timeout started';
     my $server_conf = $redis->conf;
     $server_conf->{server} = '127.0.0.1:'.$server_conf->{port} unless exists $server_conf->{server};
     my $redis_client;
@@ -129,9 +130,13 @@ sub test_timeout {
         ok $coll->ping, 'The collection is connected';
         diag 'Connection was reestablished for '.( $finish_time - $start_time)." secs (add_client_parameters: @$add_client_parameters)";
     }
+
+    pass '<< test_timeout finished';
 }
 
 sub test_alrm {
+    pass '>> test_alarm started';
+
     create_new_collection( $redis );
     $coll->reconnect_on_error( 0 );
 
@@ -160,7 +165,7 @@ sub test_alrm {
 
     foreach my $reconnect_on_error ( 0, 1 ) # ATTENTION: not use ( 1,0 )
     {
-        my $max_iterations = 3;
+        my $max_iterations = 2;
         for ( my $i = 1; $i <= $max_iterations; $i++ )
         {
             $coll->reconnect_on_error( $reconnect_on_error );
@@ -248,6 +253,8 @@ sub test_alrm {
     }
 
     $coll->quit;
+
+    pass '<< test_alarm finished';
 }
 
 sub create_new_collection {
@@ -292,6 +299,8 @@ sub destructive_alarm
     my $timeout             = shift;
     my $return_as_insert    = shift;
 
+    pass '>>>> destructive_alarm started';
+
     my ( $ret, $error, $last_error );
     my $start_time = Time::HiRes::time();
     eval {
@@ -317,6 +326,8 @@ sub destructive_alarm
     ok !defined( $ret ), 'the result is not set because of the interruption of operation';
     ok $error, 'interrupted by the ALRM signal';
     ok $last_error, 'interrupted by us';
+
+    pass '<<<< destructive_alarm finished';
 
     return( $ret, $error, $last_error, $finish_time - $start_time );
 }
