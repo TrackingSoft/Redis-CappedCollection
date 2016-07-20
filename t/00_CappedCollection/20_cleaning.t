@@ -91,6 +91,11 @@ SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
+    {
+        no warnings;
+        $Redis::CappedCollection::WAIT_USED_MEMORY = 1;
+    }
+
     $MEMORY_RESERVE_COEFFICIENT = 1 + $MIN_MEMORY_RESERVE;
 
 sub new_connection {

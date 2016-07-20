@@ -39,6 +39,7 @@ perl -MDevel::Cover t/00_CappedCollection/23_cleaning_bench.t
 perl -MDevel::Cover t/00_CappedCollection/24_timeout.t
 perl -MDevel::Cover t/00_CappedCollection/25_cleaning_correctness.t
 perl -MDevel::Cover t/00_CappedCollection/26_script_variable_protection.t
+perl -MDevel::Cover t/00_CappedCollection/27_fork.t
 perl -MDevel::Cover xt/release/00_CappedCollection/98_pod.t
 perl -MDevel::Cover xt/release/00_CappedCollection/99_pod_coverage.t
 

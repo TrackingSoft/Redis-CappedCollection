@@ -34,7 +34,10 @@ use Data::UUID;
 use Params::Util qw(
     _NUMBER
 );
-use Redis::CappedCollection ();
+use Redis;
+use Redis::CappedCollection qw(
+    $DEFAULT_SERVER
+);
 
 use Redis::CappedCollection::Test::Utils qw(
     verify_redis
@@ -137,5 +140,23 @@ isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->collection_exists, 'collection exists';
 dies_ok { Redis::CappedCollection->drop_collection() } "expecting to die";
 ok $coll->collection_exists, 'collection exists';
+
+my $redis_addr = $DEFAULT_SERVER.":$port";
+foreach my $additional ( [ no_auto_connect_on_new => 1 ], [] )
+{
+    my $redis = Redis->new(
+        server => $redis_addr,
+        @$additional,
+    );
+
+    $coll = Redis::CappedCollection->create(
+        redis   => $redis,
+        name    => $uuid->create_str,
+    );
+    isa_ok( $coll, 'Redis::CappedCollection' );
+    ok $coll->collection_exists, 'collection exists';
+    dies_ok { Redis::CappedCollection->drop_collection() } "expecting to die";
+    ok $coll->collection_exists, 'collection exists';
+}
 
 }

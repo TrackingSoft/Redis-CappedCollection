@@ -162,18 +162,21 @@ clear_coll_data( $coll );
 $coll->quit;
 
 # each argument separately
-
-$redis = Redis->new(
-    server => $redis_addr,
+foreach my $additional ( [ no_auto_connect_on_new => 1 ], [] )
+{
+    $redis = Redis->new(
+        server => $redis_addr,
+        @$additional,
     );
 
-$coll = Redis::CappedCollection->create(
-    redis   => $redis,
-    name    => $uuid->create_str,
+    $coll = Redis::CappedCollection->create(
+        redis   => $redis,
+        name    => $uuid->create_str,
     );
-isa_ok( $coll, 'Redis::CappedCollection' );
-is $coll->_server, $redis_addr, $msg;
-ok ref( $coll->_redis ) =~ /Redis/, $msg;
+    isa_ok( $coll, 'Redis::CappedCollection' );
+    is $coll->_server, $redis_addr, $msg;
+    ok ref( $coll->_redis ) =~ /Redis/, $msg;
+}
 
 $coll = Redis::CappedCollection->create(
     redis   => $redis,

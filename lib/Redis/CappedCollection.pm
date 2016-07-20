@@ -394,7 +394,10 @@ Possibly you should modify the constructor parameters for more intense automatic
 =cut
 const our $E_UNKNOWN_ERROR          => -1013;
 
-our $DEBUG = 0;
+our $DEBUG                  = 0;
+our $WAIT_USED_MEMORY       = 0;    # No attempt to protect against used_memory > maxmemory
+#our $WAIT_USED_MEMORY       = 1;
+our $_MAX_WORKING_CYCLES    = 5_000_000;    # for _long_term_operation method
 
 our %ERROR = (
     $E_NO_ERROR             => 'No error',
@@ -419,6 +422,8 @@ const our $REDIS_MEMORY_ERROR_MSG   => "$REDIS_MEMORY_ERROR_CODE $ERROR{ $E_MAXM
 const our $MAX_DATASIZE             => 512*1024*1024;   # A String value can be at max 512 Megabytes in length.
 const my $MAX_REMOVE_RETRIES        => 2;       # the number of remove retries when memory limit is near
 const my $USED_MEMORY_POLICY        => 'noeviction';
+
+const my $SCRIPT_DEBUG_LEVEL        => 2;
 
 # status field names
 const my $_LISTS                        => 'lists';
@@ -449,6 +454,21 @@ my $_lua_time_key   = "local TIME_KEY   = TIME_KEYS..':'..list_id";
 
 my %lua_script_body;
 
+my $_lua_log_work_function = <<"END_LOG_WORK_FUNCTION";
+local _SCRIPT_NAME
+local _DEBUG_LEVEL = tonumber( ARGV[1] )
+
+local _log_work = function ( log_str, script_name )
+    if script_name ~= nil then
+        _SCRIPT_NAME = script_name
+    end
+
+    if _DEBUG_LEVEL == $SCRIPT_DEBUG_LEVEL then
+        redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '.._SCRIPT_NAME )
+    end
+end
+END_LOG_WORK_FUNCTION
+
 my $_lua_clean_data = <<"END_CLEAN_DATA";
 -- remove the control structures of the collection
 if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
@@ -475,6 +495,7 @@ if #arr > 0 then
 
 end
 
+_log_work( 'finish' )
 return ret
 END_CLEAN_DATA
 
@@ -579,6 +600,7 @@ local cleaning_error = function ( error_msg )
     end
     -- Level 2 points the error to where the function that called error was called
     renew_last_cleanup_values()
+    _log_work( 'finish' )
     error( error_msg, 2 )
 end
 
@@ -825,13 +847,16 @@ end
 END_CLEANING
 
 $lua_script_body{insert} = <<"END_INSERT";
+$_lua_log_work_function
+_log_work( 'start', 'insert' )
+
 -- adding data to a list of collections
 
-local coll_name             = ARGV[1]
-local list_id               = ARGV[2]
-local data_id               = ARGV[3]
-local data                  = ARGV[4]
-local data_time             = tonumber( ARGV[5] )
+local coll_name             = ARGV[2]
+local list_id               = ARGV[3]
+local data_id               = ARGV[4]
+local data                  = ARGV[5]
+local data_time             = tonumber( ARGV[6] )
 
 -- key data storage structures
 $_lua_namespace
@@ -844,11 +869,13 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
+    _log_work( 'finish' )
     return { $E_DATA_ID_EXISTS, 0, 0, 0 }
 end
 
@@ -858,6 +885,7 @@ local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMO
 if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
+            _log_work( 'finish' )
             return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
         end
     end
@@ -866,7 +894,7 @@ end
 -- deleting obsolete data, if it is necessary
 $_lua_cleaning
 local data_len = #data
-_setup( 6, 'insert', data_len ) -- 6 -> is the index of ARGV[6]
+_setup( 7, 'insert', data_len ) -- 7 -> is the index of ARGV[7]
 cleaning( list_id, data_id, false )
 
 -- add data to the list
@@ -910,17 +938,21 @@ renew_last_cleanup_values()
 INSERTS_SINCE_CLEANING = INSERTS_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
 
+_log_work( 'finish' )
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_INSERT
 
 $lua_script_body{update} = <<"END_UPDATE";
+$_lua_log_work_function
+_log_work( 'start', 'update' )
+
 -- update the data in the list of collections
 
-local coll_name             = ARGV[1]
-local list_id               = ARGV[2]
-local data_id               = ARGV[3]
-local data                  = ARGV[4]
-local new_data_time         = tonumber( ARGV[5] )
+local coll_name             = ARGV[2]
+local list_id               = ARGV[3]
+local data_id               = ARGV[4]
+local data                  = ARGV[5]
+local new_data_time         = tonumber( ARGV[6] )
 
 -- key data storage structures
 $_lua_namespace
@@ -933,9 +965,11 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 local extra_data_len
@@ -948,24 +982,27 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
     extra_data_len = data_len - #existed_data
     existed_data = nil  -- free memory
 else
+    _log_work( 'finish' )
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
 if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
     if new_data_time ~= 0 and new_data_time < last_removed_time then
+        _log_work( 'finish' )
         return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
     end
 end
 
 -- deleting obsolete data, if it can be necessary
 $_lua_cleaning
-_setup( 6, 'update', extra_data_len )   -- 6 is the index of ARGV[6]
+_setup( 7, 'update', extra_data_len )   -- 7 is the index of ARGV[7]
 cleaning( list_id, data_id, false )
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 0 then
+    _log_work( 'finish' )
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
@@ -993,17 +1030,21 @@ renew_last_cleanup_values()
 UPDATES_SINCE_CLEANING = UPDATES_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
 
+_log_work( 'finish' )
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_UPDATE
 
 $lua_script_body{upsert} = <<"END_UPSERT";
+$_lua_log_work_function
+_log_work( 'start', 'upsert' )
+
 -- update or insert the data in the list of collections
 
-local coll_name             = ARGV[1]
-local list_id               = ARGV[2]
-local data_id               = ARGV[3]
-local data_time             = tonumber( ARGV[5] )
-local start_time            = ARGV[7]
+local coll_name             = ARGV[2]
+local list_id               = ARGV[3]
+local data_id               = ARGV[4]
+local data_time             = tonumber( ARGV[6] )
+local start_time            = ARGV[8]
 
 -- key data storage structures
 $_lua_namespace
@@ -1013,24 +1054,27 @@ $_lua_data_key
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
     if data_time == -1 then
-        ARGV[5] = '0'
+        ARGV[6] = '0'
     end
     $lua_script_body{update}
 else
     if data_time == -1 then
-        ARGV[5] = start_time
+        ARGV[6] = start_time
     end
     $lua_script_body{insert}
 end
 END_UPSERT
 
 $lua_script_body{receive} = <<"END_RECEIVE";
+$_lua_log_work_function
+_log_work( 'start', 'receive' )
+
 -- returns the data from the list
 
-local coll_name             = ARGV[1]
-local list_id               = ARGV[2]
-local mode                  = ARGV[3]
-local data_id               = ARGV[4]
+local coll_name             = ARGV[2]
+local list_id               = ARGV[3]
+local mode                  = ARGV[4]
+local data_id               = ARGV[5]
 
 -- key data storage structures
 $_lua_namespace
@@ -1041,32 +1085,41 @@ $_lua_data_key
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
+    _log_work( 'finish' )
     return nil
 end
 
 if mode == 'val' then
     -- returns the specified element of the data list
+    _log_work( 'finish' )
     return redis.call( 'HGET', DATA_KEY, data_id )
 elseif mode == 'len' then
     -- returns the length of the data list
+    _log_work( 'finish' )
     return redis.call( 'HLEN', DATA_KEY )
 elseif mode == 'vals' then
     -- returns all the data from the list
+    _log_work( 'finish' )
     return redis.call( 'HVALS', DATA_KEY )
 elseif mode == 'all' then
     -- returns all data IDs and data values of the data list
+    _log_work( 'finish' )
     return redis.call( 'HGETALL', DATA_KEY )
 else
     -- sort of a mistake
+    _log_work( 'finish' )
     return nil
 end
 
 END_RECEIVE
 
 $lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
+$_lua_log_work_function
+_log_work( 'start', 'pop_oldest' )
+
 -- retrieve the oldest data stored in the collection
 
-local coll_name             = ARGV[1]
+local coll_name             = ARGV[2]
 
 -- key data storage structures
 $_lua_namespace
@@ -1076,9 +1129,11 @@ $_lua_status_key
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_NO_ERROR, false, nil, nil }
 end
 
@@ -1098,6 +1153,7 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 
@@ -1149,13 +1205,17 @@ end
 redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -1 )
 redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', last_removed_time )
 
+_log_work( 'finish' )
 return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
 
 $lua_script_body{collection_info} = <<"END_COLLECTION_INFO";
+$_lua_log_work_function
+_log_work( 'start', 'collection_info' )
+
 -- to obtain information on the status of the collection
 
-local coll_name     = ARGV[1]
+local coll_name     = ARGV[2]
 
 -- key data storage structures
 $_lua_namespace
@@ -1164,6 +1224,7 @@ $_lua_status_key
 
 -- determine whether there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
 end
 
@@ -1181,6 +1242,7 @@ local lists, items, older_allowed, cleanup_bytes, cleanup_items, memory_reserve,
 
 if type( data_version ) ~= 'string' then data_version = '0' end
 
+_log_work( 'finish' )
 return {
     $E_NO_ERROR,
     lists,
@@ -1196,9 +1258,12 @@ return {
 END_COLLECTION_INFO
 
 $lua_script_body{oldest_time} = <<"END_OLDEST_TIME";
+$_lua_log_work_function
+_log_work( 'start', 'oldest_time' )
+
 -- to obtain time corresponding to the oldest data in the collection
 
-local coll_name = ARGV[1]
+local coll_name = ARGV[2]
 
 -- key data storage structures
 $_lua_namespace
@@ -1207,18 +1272,23 @@ $_lua_status_key
 
 -- determine whe, falther there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, false }
 end
 
 local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
+_log_work( 'finish' )
 return { $E_NO_ERROR, oldest_item_time }
 END_OLDEST_TIME
 
 $lua_script_body{list_info} = <<"END_LIST_INFO";
+$_lua_log_work_function
+_log_work( 'start', 'list_info' )
+
 -- to obtain information on the status of the data list
 
-local coll_name             = ARGV[1]
-local list_id               = ARGV[2]
+local coll_name             = ARGV[2]
+local list_id               = ARGV[3]
 
 -- key data storage structures
 $_lua_namespace
@@ -1229,9 +1299,11 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, false, nil }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_NO_ERROR, false, nil }
 end
 
@@ -1241,13 +1313,17 @@ local items = redis.call( 'HLEN', DATA_KEY )
 -- the second data
 local oldest_item_time = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
 
+_log_work( 'finish' )
 return { $E_NO_ERROR, items, oldest_item_time }
 END_LIST_INFO
 
 $lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
+$_lua_log_work_function
+_log_work( 'start', 'drop_collection' )
+
 -- to remove the entire collection
 
-local coll_name     = ARGV[1]
+local coll_name     = ARGV[2]
 
 -- key data storage structures
 $_lua_namespace
@@ -1265,9 +1341,12 @@ $_lua_clean_data
 END_DROP_COLLECTION
 
 $lua_script_body{clear_collection} = <<"END_CLEAR_COLLECTION";
+$_lua_log_work_function
+_log_work( 'start', 'clear_collection' )
+
 -- to remove the entire collection data
 
-local coll_name     = ARGV[1]
+local coll_name     = ARGV[2]
 
 -- key data storage structures
 $_lua_namespace
@@ -1287,10 +1366,13 @@ $_lua_clean_data
 END_CLEAR_COLLECTION
 
 $lua_script_body{drop_list} = <<"END_DROP_LIST";
+$_lua_log_work_function
+_log_work( 'start', 'drop_list' )
+
 -- to remove the data_list
 
-local coll_name     = ARGV[1]
-local list_id       = ARGV[2]
+local coll_name     = ARGV[2]
+local list_id       = ARGV[3]
 
 -- key data storage structures
 $_lua_namespace
@@ -1301,9 +1383,11 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_COLLECTION_DELETED, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
+    _log_work( 'finish' )
     return { $E_NO_ERROR, 0 }
 end
 
@@ -1330,17 +1414,21 @@ redis.call( 'HINCRBY', STATUS_KEY, '$_LISTS', -1 )
 -- remove the name of the list from the queue collection
 redis.call( 'ZREM', QUEUE_KEY, list_id )
 
+_log_work( 'finish' )
 return { $E_NO_ERROR, 1 }
 END_DROP_LIST
 
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
+$_lua_log_work_function
+_log_work( 'start', 'verify_collection' )
+
 -- creation of the collection and characterization of the collection by accessing existing collection
 
-local coll_name         = ARGV[1];
-local older_allowed     = ARGV[2];
-local cleanup_bytes     = ARGV[3];
-local cleanup_items     = ARGV[4];
-local memory_reserve    = ARGV[5];
+local coll_name         = ARGV[2];
+local older_allowed     = ARGV[3];
+local cleanup_bytes     = ARGV[4];
+local cleanup_items     = ARGV[5];
+local memory_reserve    = ARGV[6];
 
 local data_version = '$DATA_VERSION'
 
@@ -1378,6 +1466,7 @@ else
     );
 end
 
+_log_work( 'finish' )
 return {
     status_exist,
     older_allowed,
@@ -1389,15 +1478,18 @@ return {
 END_VERIFY_COLLECTION
 
 $lua_script_body{_long_term_operation} = <<"END_LONG_TERM_OPERATION";
-local coll_name         = ARGV[1];
-local return_as_insert  = tonumber( ARGV[2] );
+$_lua_log_work_function
+_log_work( 'start', '_long_term_operation' )
+
+local coll_name         = ARGV[2];
+local return_as_insert  = tonumber( ARGV[3] );
 
 local STATUS_KEY            = 'C:S:'..coll_name;
 local DATA_VERSION_KEY      = '$_DATA_VERSION';
 
 local LIST                  = 'Test_list';
 local DATA                  = 'Data';
-local MAX_WORKING_CYCLES    = 5000000;
+local MAX_WORKING_CYCLES    = $_MAX_WORKING_CYCLES;
 
 redis.call( 'DEL', LIST );
 
@@ -1412,8 +1504,10 @@ while i < MAX_WORKING_CYCLES do
 end
 
 if return_as_insert == 1 then
+    _log_work( 'finish' )
     return { $E_NO_ERROR, 0, 0, 0 };
 else
+    _log_work( 'finish' )
     return { $E_NO_ERROR, ret, '_long_term_operation' };
 end
 END_LONG_TERM_OPERATION
@@ -1528,7 +1622,12 @@ sub BUILD {
         my $conf = $redis->conf;
         $conf->{server} = '127.0.0.1:'.$conf->{port} unless exists $conf->{server};
         $self->_server( $conf->{server} );
-        $self->_redis( Redis->new( server => $conf->{server} ) );
+        my @password = $conf->{requirepass} ? ( password => $conf->{requirepass} ) : ();
+        $self->_redis( Redis->new(
+                server => $conf->{server},
+                @password,
+            )
+        );
     } elsif ( _INSTANCE( $redis, __PACKAGE__ ) ) {
         $self->_server( $redis->_server );
         $self->_redis( $self->_redis );
@@ -1543,6 +1642,7 @@ sub BUILD {
 
     $self->_connection_timeout_trigger( $self->connection_timeout );
     $self->_operation_timeout_trigger( $self->operation_timeout );
+    $self->_redis->connect if $self->_redis->{no_auto_connect_on_new};
 
     if ( $self->_create_from_naked_new ) {
         warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
@@ -1997,6 +2097,7 @@ sub insert {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'insert' ),
         0,
+        $DEBUG,
         $self->name,
         $list_id,
         $data_id,
@@ -2103,6 +2204,7 @@ sub update {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'update' ),
         0,
+        $DEBUG,
         $self->name,
         $list_id,
         $data_id,
@@ -2177,6 +2279,7 @@ sub upsert {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'upsert' ),
         0,
+        $DEBUG,
         $self->name,
         $list_id,
         $data_id,
@@ -2272,6 +2375,7 @@ sub receive {
         return $self->_call_redis(
             $self->_lua_script_cmd( 'receive' ),
             0,
+            $DEBUG,
             $self->name,
             $list_id,
             'val',
@@ -2282,6 +2386,7 @@ sub receive {
             return $self->_call_redis(
                 $self->_lua_script_cmd( 'receive' ),
                 0,
+                $DEBUG,
                 $self->name,
                 $list_id,
                 defined( $data_id ) ? 'all' : 'vals',
@@ -2291,6 +2396,7 @@ sub receive {
             return $self->_call_redis(
                 $self->_lua_script_cmd( 'receive' ),
                 0,
+                $DEBUG,
                 $self->name,
                 $list_id,
                 'len',
@@ -2330,6 +2436,7 @@ sub pop_oldest {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'pop_oldest' ),
         0,
+        $DEBUG,
         $self->name,
     );
 
@@ -2496,6 +2603,7 @@ sub collection_info {
         @ret = $self->_call_redis(
             $self->_lua_script_cmd( 'collection_info' ),
             0,
+            $DEBUG,
             $self->name,
         );
         $results = _lists2hash( \@_collection_info_result_keys, \@ret );
@@ -2526,6 +2634,7 @@ sub collection_info {
             $redis,
             _lua_script_cmd( $redis, 'collection_info' ),
             0,
+            $DEBUG,
             $name,
         );
         $results = _lists2hash( \@_collection_info_result_keys, \@ret );
@@ -2589,6 +2698,7 @@ sub list_info {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'list_info' ),
         0,
+        $DEBUG,
         $self->name,
         $list_id,
     );
@@ -2633,6 +2743,7 @@ sub oldest_time {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'oldest_time' ),
         0,
+        $DEBUG,
         $self->name,
     );
     my $results = _lists2hash( \@_oldest_time_result_keys, \@ret );
@@ -2949,6 +3060,7 @@ sub drop_collection {
         $ret = $self->_call_redis(
             $self->_lua_script_cmd( 'drop_collection' ),
             0,
+            $DEBUG,
             $self->name,
         );
 
@@ -2970,6 +3082,7 @@ sub drop_collection {
             $redis,
             _lua_script_cmd( $redis, 'drop_collection' ),
             0,
+            $DEBUG,
             $name,
         );
         _clear_sha1( $redis );
@@ -3006,6 +3119,7 @@ sub drop_list {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( 'drop_list' ),
         0,
+        $DEBUG,
         $self->name,
         $list_id,
     );
@@ -3051,6 +3165,7 @@ sub clear_collection {
     $ret = $self->_call_redis(
         $self->_lua_script_cmd( 'clear_collection' ),
         0,
+        $DEBUG,
         $self->name,
     );
 
@@ -3285,6 +3400,7 @@ sub _get_redis {
 
     $redis = _redis_constructor( $redis )
         unless _INSTANCE( $redis, 'Redis' );
+    $redis->connect if exists( $redis->{no_auto_connect_on_new} ) && $redis->{no_auto_connect_on_new};
 
     return $redis;
 }
@@ -3300,6 +3416,7 @@ sub _long_term_operation {
     my @ret = $self->_call_redis(
         $self->_lua_script_cmd( '_long_term_operation' ),
         0,
+        $DEBUG,
         $self->name,
         $return_as_insert ? 1 : 0,
     );
@@ -3360,12 +3477,13 @@ sub _verify_collection {
     my ( $status_exist, $older_allowed, $cleanup_bytes, $cleanup_items, $memory_reserve, $data_version ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
         0,
+        $DEBUG,
         $self->name,
         $self->older_allowed ? 1 : 0,
         $self->cleanup_bytes || 0,
         $self->cleanup_items || 0,
         $self->memory_reserve || $MIN_MEMORY_RESERVE,
-        );
+    );
 
     if ( $status_exist ) {
         $self->cleanup_bytes( $cleanup_bytes )  unless $self->cleanup_bytes;
@@ -3601,11 +3719,13 @@ sub _call_redis {
 
         $redis = $self->_redis;
     } else {                                    # allow calling Foo::bar
-        $redis  = shift;
+        $redis = shift;
     }
-    my $method  = shift;
+    my $method = shift;
 
     $self->_set_last_errorcode( $E_NO_ERROR ) if $self;
+
+    $self->_wait_used_memory if $self && $method =~ /^EVAL/i;
 
     my @return;
     my @args = @_;
@@ -3627,6 +3747,79 @@ sub _call_redis {
     }
 
     return wantarray ? @return : $return[0];
+}
+
+sub _wait_used_memory {
+    return unless $WAIT_USED_MEMORY;
+
+    my ( $self ) = @_;
+
+    my $sleepped;
+    if ( my $maxmemory = $self->_maxmemory ) {
+        my $max_timeout = $self->operation_timeout || $DEFAULT_OPERATION_TIMEOUT;
+        my $timeout = 0.01;
+        $sleepped = 0;
+        my $before_memory_info = _decode_info_str( $self->_call_redis( 'INFO', 'memory' ) );
+        my $after_memory_info = $before_memory_info;
+        WAIT_USED_MEMORY: {
+            my $used_memory = $after_memory_info->{used_memory};
+            if ( $used_memory < $maxmemory || $sleepped > $max_timeout ) {
+                if ( $DEBUG && $sleepped ) {
+                    say STDERR sprintf( "# %.5f [%d] _wait_used_memory: LAST sleepped = %.2f (sec)",
+                        Time::HiRes::time(),
+                        $$,
+                        $sleepped,
+                    );
+
+                    # leave only:
+                    #   maxmemory
+                    #   used_memory
+                    #   used_memory_rss
+                    #   used_memory_lua
+                    #   used_memory_peak
+                    #   mem_fragmentation_ratio
+                    foreach my $key ( qw(
+                                used_memory_human
+                                used_memory_rss_human
+                                used_memory_peak_human
+                                total_system_memory
+                                total_system_memory_human
+                                used_memory_lua_human
+                                maxmemory_human
+                                maxmemory_policy
+                                mem_allocator
+                                lazyfree_pending_objects
+                            )
+                        ) {
+                        delete $before_memory_info->{ $key };
+                        delete $after_memory_info->{ $key };
+                    }
+
+                    use Data::Dumper;
+                    $Data::Dumper::Sortkeys = 1;
+                    say STDERR sprintf( "# memory info:\n%s%s",
+                        Data::Dumper->Dump( [ $before_memory_info ], [ 'before' ] ),
+                        Data::Dumper->Dump( [ $after_memory_info ], [ 'after' ] ),
+                    );
+                }
+                last WAIT_USED_MEMORY;
+            }
+
+            Time::HiRes::sleep $timeout;
+            $sleepped += $timeout;
+#            $self->_redis->connect;
+            $after_memory_info = _decode_info_str( $self->_call_redis( 'INFO', 'memory' ) );
+            redo WAIT_USED_MEMORY;
+        }
+    }
+
+    return $sleepped;
+}
+
+sub _decode_info_str {
+    my ( $info_str ) = @_;
+
+    return { map { split( /:/, $_, 2 ) } grep { /^[^#]/ } split( /\r\n/, $info_str ) };
 }
 
 sub DESTROY {
@@ -3938,6 +4131,8 @@ So the Redis server may not be able to correctly forward the request
 to the appropriate node in the cluster.
 
 We strongly recommend setting C<maxmemory> option in the F<redis.conf> file.
+
+WARN: Not use C<maxmemory> less than for example 70mb (60 connections) for avoid 'used_memory > maxmemory' problem.
 
 Old data with the same time will be forced out in no specific order.
 

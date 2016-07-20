@@ -64,6 +64,11 @@ SKIP: {
     diag $skip_msg if $skip_msg;
     skip( $skip_msg, 1 ) if $skip_msg;
 
+    {
+        no warnings;
+        $Redis::CappedCollection::WAIT_USED_MEMORY = 1;
+    }
+
 # For Test::RedisServer
 
 my ( $coll, $name, $tmp, $id, $status_key, $queue_key, $list_key, @arr, $len, $maxmemory, $policy, $older_allowed, $info );

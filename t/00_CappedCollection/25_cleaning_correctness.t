@@ -67,6 +67,10 @@ SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
+    {
+        no warnings;
+        $Redis::CappedCollection::WAIT_USED_MEMORY = 1;
+    }
     $MAXMEMORY = 1_000_000;
 
     # $cleanup_bytes > 0 && $cleanup_items == 0

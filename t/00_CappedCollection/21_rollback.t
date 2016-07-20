@@ -165,6 +165,11 @@ SKIP: {
     diag $ERROR_MSG if $ERROR_MSG;
     skip( $ERROR_MSG, 1 ) if $ERROR_MSG;
 
+    {
+        no warnings;
+        $Redis::CappedCollection::WAIT_USED_MEMORY = 1;
+    }
+
     get_collection();
 
 #-- Insert ---------------------------------------------------------------------
