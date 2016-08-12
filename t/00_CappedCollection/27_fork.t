@@ -13,48 +13,44 @@ use Test::More;
 plan 'no_plan';
 
 #-- work conditions
-my ( $MAXMEMORY, $MAXCLIENTS, $MEMORY_RESERVE, $CHILDREN, $OPERATIONS, $DEBUG, $WAIT_USED_MEMORY, $CONCURENT_CHILD, $CONCURRENT_FORKS, $CONCURRENT_OPERATIONS, $LUA_TIME_LIMIT );
+my (
+    $MAXMEMORY,
+    $MAXCLIENTS,
+    $MEMORY_RESERVE,
+    $CHILDREN,
+    $OPERATIONS,
+    $DEBUG,
+    $WAIT_USED_MEMORY,
+    $CONCURENT_CHILD,
+    $CONCURRENT_FORKS,
+    $CONCURRENT_OPERATIONS,
+    $LUA_TIME_LIMIT,
+    $MAX_WORKING_CYCLES
+);
 
-# NOTE: No default CPAN testing now because it's so long...
-my $CPAN_TESTING = !$ENV{AUTHOR_TESTS};
-
-# NOTE: condition below commented for quick testing
-#if ( $CPAN_TESTING ) {
-    #NOTE: $MAXMEMORY below value used only when test without script arguments
-    $MAXMEMORY              = 70 * 1024 * 1024; # minimum for avoid 'used_memory > maxmemory' problem
-    $MEMORY_RESERVE         = 0.05; # 0.05 is Redis::CappedCollection default
-    $MAXCLIENTS             = 63;
-#    $MAXCLIENTS             = 10_000;
-    # work sockets:
-    #     Test::RedisServer's socket
-    #   + first test's collection socket
-    #   + parent's work collection socket
-    #   + $CHILDREN's sockets
-    $CHILDREN               = $MAXCLIENTS - 3;
-#    $CHILDREN               = 40;
-    $OPERATIONS             = 100;
-    $DEBUG                  = 1;    # logging: $DEBUG > 0 for 'used_memory > maxmemory' waiting, 2 for operation durations
-    $WAIT_USED_MEMORY       = 1;
-#    $CONCURENT_CHILD        = $CHILDREN;
-    $CONCURENT_CHILD        = 40;
-    $CONCURRENT_FORKS       = 250_000;
-#FIXME: 0
-    $CONCURRENT_OPERATIONS  = 100;
-    $LUA_TIME_LIMIT         = 10;   # ms
-#} else {
-#    $MAXMEMORY              = 512 * 1024 * 1024;
-#    $MEMORY_RESERVE         = 0.05;
-#    $MAXCLIENTS             = 1_000;
-#    $CHILDREN               = 100;
-#    $OPERATIONS             = 1_000;
-#    $DEBUG                  = 1;
-#    $WAIT_USED_MEMORY       = 0;
-##    $WAIT_USED_MEMORY       = 1;
-#    $CONCURENT_CHILD        = 100;
-#    $CONCURRENT_FORKS       = 1_000_000;
-#    $CONCURRENT_OPERATIONS  = 10;
-#    $LUA_TIME_LIMIT         = 10;   # ms
-#}
+#NOTE: $MAXMEMORY below value used only when test without script arguments
+$MAXMEMORY              = 70 * 1024 * 1024; # minimum for avoid 'used_memory > maxmemory' problem
+$MEMORY_RESERVE         = 0.05; # 0.05 is Redis::CappedCollection default
+$MAXCLIENTS             = 63;
+#$MAXCLIENTS             = 10_000;
+# work sockets:
+#     Test::RedisServer's socket
+#   + first test's collection socket
+#   + parent's work collection socket
+#   + $CHILDREN's sockets
+$CHILDREN               = $MAXCLIENTS - 3;
+#$CHILDREN               = 40;
+$OPERATIONS             = 100;
+$DEBUG                  = 1;        # logging: $DEBUG > 0 for 'used_memory > maxmemory' waiting, 2 and 3 for operation durations logging
+$WAIT_USED_MEMORY       = 1;
+#$CONCURENT_CHILD        = $CHILDREN;
+$CONCURENT_CHILD        = 40;
+$CONCURRENT_FORKS       = 250_000;
+$CONCURRENT_OPERATIONS  = 1;        # 0 for more 'Could not connect to Redis server' problems
+$LUA_TIME_LIMIT         = 5_000;    # ms (default 5_000)
+$MAX_WORKING_CYCLES     = 0;        # for $Redis::CappedCollection::_MAX_WORKING_CYCLES (default 10_000_000)
+                                    # i.e. for Redis::CappedCollection->_long_term_operation method.
+                                    # if 0 than child works without Redis::CappedCollection->_long_term_operation calling
 
 our ( $_SERVER_ADDRESS, $_COLLECTION_NAME, $_WORK_MODE, $_PASSWORD );
 BEGIN {
@@ -140,20 +136,17 @@ BEGIN {
     plan skip_all => 'because Test::Exception required for testing' if $@;
 }
 
-#BEGIN {
-#    eval 'use Test::NoWarnings';                ## no critic
-#    plan skip_all => 'because Test::NoWarnings required for testing' if $@;
-#}
-
 BEGIN {
     unless ( $_SERVER_ADDRESS ) {
-        eval '
-            use Data::UUID;
-            use Redis::CappedCollection::Test::Utils qw(
-                get_redis
-                verify_redis
-            );
-        ';  ## no critic;
+        eval(                                   ## no critic;
+            '
+                use Data::UUID;
+                use Redis::CappedCollection::Test::Utils qw(
+                    get_redis
+                    verify_redis
+                );
+            '
+        );
         plan skip_all => 'because Data::UUID, Redis::CappedCollection::Test::Utils required for testing' if $@;
     }
 }
@@ -183,8 +176,9 @@ unless ( $ENV{AUTHOR_TESTS} ) {
 
 # -- Global variables
 
-$Redis::CappedCollection::DEBUG             = $DEBUG;
-$Redis::CappedCollection::WAIT_USED_MEMORY  = $WAIT_USED_MEMORY;
+$Redis::CappedCollection::DEBUG                 = $DEBUG;
+$Redis::CappedCollection::WAIT_USED_MEMORY      = $WAIT_USED_MEMORY;
+$Redis::CappedCollection::_MAX_WORKING_CYCLES   = $MAX_WORKING_CYCLES;
 
 #-- data variables
 my $LIST_ID         = 'Some list_id';
@@ -570,6 +564,20 @@ sub insert_data {
     return $data_id;
 }
 
+sub long_term_operation {
+    my ( $collection, $pid, $ppid ) = @_;
+
+    my $result = try {
+        $collection->_long_term_operation();
+    } catch {
+        my $error = $_;
+        BAIL_OUT( ( $pid ? get_time_str()." [$pid] " : '' )."BAD upsert: $error" );
+    };
+    BAIL_OUT( get_time_str().' upsert: Cannot insert into collection' ) unless $result;
+
+    return;
+}
+
 sub display_maxclients {
     my ( $definition ) = @_;
 
@@ -749,12 +757,25 @@ sub start_concurrent_children {
     }
 }
 
+my @operations = (
+    \&insert_data,
+    \&long_term_operation,
+);
+
 sub concurent_child_work {
     my ( $ppid ) = @_;
 
     my $collection  = open_connection();
 
-    insert_data( $collection, $$, $ppid ) for 1 .. $CONCURRENT_OPERATIONS;
+    for ( 1 .. $CONCURRENT_OPERATIONS ){
+        if ( $MAX_WORKING_CYCLES ) {
+            my $operation_idx = int( rand( scalar( @operations ) ) );
+            my $operation = $operations[ $operation_idx ];
+            &$operation( $collection, $$, $ppid );
+        } else {
+            insert_data( $collection, $$, $ppid );
+        }
+    }
 }
 
 sub get_time_str {

@@ -394,10 +394,13 @@ Possibly you should modify the constructor parameters for more intense automatic
 =cut
 const our $E_UNKNOWN_ERROR          => -1013;
 
-our $DEBUG                  = 0;
+our $DEBUG                  = 0;    # > 0 for 'used_memory > maxmemory' waiting
+                                    # 1 - use 'confess' instead 'croak' for errors
+                                    # 2 - lua-script durations logging, use 'croak' for errors
+                                    # 3 - lua-script durations logging, use 'confess' for errors
 our $WAIT_USED_MEMORY       = 0;    # No attempt to protect against used_memory > maxmemory
 #our $WAIT_USED_MEMORY       = 1;
-our $_MAX_WORKING_CYCLES    = 5_000_000;    # for _long_term_operation method
+our $_MAX_WORKING_CYCLES    = 10_000_000;   # for _long_term_operation method
 
 our %ERROR = (
     $E_NO_ERROR             => 'No error',
@@ -458,13 +461,52 @@ my $_lua_log_work_function = <<"END_LOG_WORK_FUNCTION";
 local _SCRIPT_NAME
 local _DEBUG_LEVEL = tonumber( ARGV[1] )
 
+local table_val_to_str = function ( v )
+    if "string" == type( v ) then
+        v = string.gsub( v, "\\n", "\\\\n" )
+        if string.match( string.gsub( v, "[^'\\"]", "" ), '^"+\$' ) then
+            return "'" .. v .. "'"
+        end
+        return '"' .. string.gsub( v, '"', '\\\\"' ) .. '"'
+    else
+        return "table" == type( v ) and table_tostring( v ) or tostring( v )
+    end
+end
+
+local table_key_to_str = function ( k )
+    if "string" == type( k ) and string.match( k, "^[_%a][_%a%d]*\$" ) then
+        return k
+    else
+        return "[" .. table_val_to_str( k ) .. "]"
+    end
+end
+
+local table_tostring = function ( tbl )
+    local result, done = {}, {}
+    for k, v in ipairs( tbl ) do
+        table.insert( result, table_val_to_str( v ) )
+        done[ k ] = true
+    end
+    for k, v in pairs( tbl ) do
+        if not done[ k ] then
+            table.insert( result, table_key_to_str( k ) .. "=" .. table_val_to_str( v ) )
+        end
+    end
+    return "{" .. table.concat( result, "," ) .. "}"
+end
+
 local _log_work = function ( log_str, script_name )
     if script_name ~= nil then
         _SCRIPT_NAME = script_name
     end
 
-    if _DEBUG_LEVEL == $SCRIPT_DEBUG_LEVEL then
-        redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '.._SCRIPT_NAME )
+    if _DEBUG_LEVEL >= $SCRIPT_DEBUG_LEVEL then
+        if script_name ~= nil then
+            local args_str = table_tostring( ARGV )
+            redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '..script_name..' ('..args_str..')' )
+        else
+            redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '.._SCRIPT_NAME )
+        end
     end
 end
 END_LOG_WORK_FUNCTION
@@ -602,40 +644,6 @@ local cleaning_error = function ( error_msg )
     renew_last_cleanup_values()
     _log_work( 'finish' )
     error( error_msg, 2 )
-end
-
-local table_val_to_str = function ( v )
-    if "string" == type( v ) then
-        v = string.gsub( v, "\\n", "\\\\n" )
-        if string.match( string.gsub( v, "[^'\\"]", "" ), '^"+\$' ) then
-            return "'" .. v .. "'"
-        end
-        return '"' .. string.gsub( v, '"', '\\\\"' ) .. '"'
-    else
-        return "table" == type( v ) and table_tostring( v ) or tostring( v )
-    end
-end
-
-local table_key_to_str = function ( k )
-    if "string" == type( k ) and string.match( k, "^[_%a][_%a%d]*\$" ) then
-        return k
-    else
-        return "[" .. table_val_to_str( k ) .. "]"
-    end
-end
-
-local table_tostring = function ( tbl )
-    local result, done = {}, {}
-    for k, v in ipairs( tbl ) do
-        table.insert( result, table_val_to_str( v ) )
-        done[ k ] = true
-    end
-    for k, v in pairs( tbl ) do
-        if not done[ k ] then
-            table.insert( result, table_key_to_str( k ) .. "=" .. table_val_to_str( v ) )
-        end
-    end
-    return "{" .. table.concat( result, "," ) .. "}"
 end
 
 -- deleting old data to make room for new data
@@ -848,7 +856,7 @@ END_CLEANING
 
 $lua_script_body{insert} = <<"END_INSERT";
 $_lua_log_work_function
-_log_work( 'start', 'insert' )
+_log_work( 'start', 'insert', ARGV )
 
 -- adding data to a list of collections
 
@@ -1481,21 +1489,21 @@ $lua_script_body{_long_term_operation} = <<"END_LONG_TERM_OPERATION";
 $_lua_log_work_function
 _log_work( 'start', '_long_term_operation' )
 
-local coll_name         = ARGV[2];
-local return_as_insert  = tonumber( ARGV[3] );
+local coll_name             = ARGV[2];
+local return_as_insert      = tonumber( ARGV[3] );
+local max_working_cycles    = tonumber( ARGV[4] );
 
 local STATUS_KEY            = 'C:S:'..coll_name;
 local DATA_VERSION_KEY      = '$_DATA_VERSION';
 
 local LIST                  = 'Test_list';
 local DATA                  = 'Data';
-local MAX_WORKING_CYCLES    = $_MAX_WORKING_CYCLES;
 
 redis.call( 'DEL', LIST );
 
 local ret;
 local i = 1;
-while i < MAX_WORKING_CYCLES do
+while i < max_working_cycles do
     -- simple active actions
     local data_version = redis.call( 'HGET', STATUS_KEY, DATA_VERSION_KEY );
     ret = redis.call( 'HSET', LIST, i, DATA );
@@ -3371,7 +3379,7 @@ sub _unknown_error {
 sub _croak {
     my @args = @_;
 
-    if ( $DEBUG ) {
+    if ( $DEBUG == 1 || $DEBUG == 3 ) {
         confess @args;
     } else {
         croak @args;
@@ -3419,6 +3427,7 @@ sub _long_term_operation {
         $DEBUG,
         $self->name,
         $return_as_insert ? 1 : 0,
+        $_MAX_WORKING_CYCLES,
     );
 
     my ( $error ) = @ret;

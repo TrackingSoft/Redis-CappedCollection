@@ -7,7 +7,7 @@ use Date::Parse;
 
 my $MIN_DISPLAYED_DURATION = 0.040; # sec
 
-my ( $tm_start, $tm_finish, $prev_script, $operation );
+my ( $tm_start, $tm_finish, $prev_script, $operation, $start_line );
 while ( <> ) {
     my $line = $_;
 
@@ -21,15 +21,17 @@ while ( <> ) {
         if ( $mode eq 'start' ) {
             $tm_start = $tm;
             $prev_script = $script;
+            $start_line = $line;
         } elsif ( defined( $tm_start ) && $script eq $prev_script && $mode eq 'finish' ) {
             $tm_finish = $tm;
             my $duration = $tm_finish - $tm_start;
             if ( $duration >= $MIN_DISPLAYED_DURATION ) {
                 chomp $line;
-                say sprintf( "operation = %d, '%s' duration: %.3f, finish line = '%s'",
+                say sprintf( "operation = %d, '%s' duration: %.3f,\n\tstart line = %s\n\tfinish line = '%s'",
                     $operation,
                     $script,
                     $duration,
+                    $start_line,
                     $line,
                 );
             }
