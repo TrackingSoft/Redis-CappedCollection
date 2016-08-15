@@ -508,6 +508,10 @@ local _log_work = function ( log_str, script_name )
             redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '.._SCRIPT_NAME )
         end
     end
+
+    if log_str == 'finish' then
+        collectgarbage()
+    end
 end
 END_LOG_WORK_FUNCTION
 
@@ -678,6 +682,7 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
             -- Level 2 points the error to where the function that called error was called
             renew_last_cleanup_values()
+            _log_work( 'finish' )
             error( 'Queue key does not exist', 2 )
         end
 
@@ -816,6 +821,10 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_MAXMEMORY', REDIS_MAXMEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_USED_MEMORY', REDIS_USED_MEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES_MUST_BE_DELETED', LAST_CLEANUP_BYTES_MUST_BE_DELETED )
+
+        if _DEBUG_LEVEL >= $SCRIPT_DEBUG_LEVEL then
+            redis.log( redis.LOG_NOTICE, 'cleaned: '..TOTAL_BYTES_DELETED..' bytes, '..LAST_CLEANUP_ITEMS..' items' )
+        end
     end
 end
 
@@ -1097,28 +1106,26 @@ if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     return nil
 end
 
+local ret
 if mode == 'val' then
     -- returns the specified element of the data list
-    _log_work( 'finish' )
-    return redis.call( 'HGET', DATA_KEY, data_id )
+    ret = redis.call( 'HGET', DATA_KEY, data_id )
 elseif mode == 'len' then
     -- returns the length of the data list
-    _log_work( 'finish' )
-    return redis.call( 'HLEN', DATA_KEY )
+    ret = redis.call( 'HLEN', DATA_KEY )
 elseif mode == 'vals' then
     -- returns all the data from the list
-    _log_work( 'finish' )
-    return redis.call( 'HVALS', DATA_KEY )
+    ret = redis.call( 'HVALS', DATA_KEY )
 elseif mode == 'all' then
     -- returns all data IDs and data values of the data list
-    _log_work( 'finish' )
-    return redis.call( 'HGETALL', DATA_KEY )
+    ret = redis.call( 'HGETALL', DATA_KEY )
 else
     -- sort of a mistake
-    _log_work( 'finish' )
-    return nil
+    ret = nil
 end
 
+_log_work( 'finish' )
+return ret
 END_RECEIVE
 
 $lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
@@ -1368,7 +1375,7 @@ redis.call( 'HMSET', STATUS_KEY,
     '$_LISTS',                  0,
     '$_ITEMS',                  0,
     '$_LAST_REMOVED_TIME',      0
-);
+)
 
 $_lua_clean_data
 END_CLEAR_COLLECTION
@@ -1432,11 +1439,11 @@ _log_work( 'start', 'verify_collection' )
 
 -- creation of the collection and characterization of the collection by accessing existing collection
 
-local coll_name         = ARGV[2];
-local older_allowed     = ARGV[3];
-local cleanup_bytes     = ARGV[4];
-local cleanup_items     = ARGV[5];
-local memory_reserve    = ARGV[6];
+local coll_name         = ARGV[2]
+local older_allowed     = ARGV[3]
+local cleanup_bytes     = ARGV[4]
+local cleanup_items     = ARGV[5]
+local memory_reserve    = ARGV[6]
 
 local data_version = '$DATA_VERSION'
 
@@ -1445,7 +1452,7 @@ $_lua_namespace
 $_lua_status_key
 
 -- determine whether there is a collection
-local status_exist = redis.call( 'EXISTS', STATUS_KEY );
+local status_exist = redis.call( 'EXISTS', STATUS_KEY )
 
 if status_exist == 1 then
 -- if there is a collection
@@ -1455,7 +1462,7 @@ if status_exist == 1 then
         '$_CLEANUP_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION'
-    ) );
+    ) )
 
     if type( data_version ) ~= 'string' then data_version = '0' end
 else
@@ -1471,7 +1478,7 @@ else
         '$_LAST_REMOVED_TIME',  0,
         '$_LAST_CLEANUP_BYTES', '[0]',
         '$_LAST_CLEANUP_ITEMS', '[0]'
-    );
+    )
 end
 
 _log_work( 'finish' )
@@ -1482,41 +1489,41 @@ return {
     cleanup_items,
     memory_reserve,
     data_version
-};
+}
 END_VERIFY_COLLECTION
 
 $lua_script_body{_long_term_operation} = <<"END_LONG_TERM_OPERATION";
 $_lua_log_work_function
 _log_work( 'start', '_long_term_operation' )
 
-local coll_name             = ARGV[2];
-local return_as_insert      = tonumber( ARGV[3] );
-local max_working_cycles    = tonumber( ARGV[4] );
+local coll_name             = ARGV[2]
+local return_as_insert      = tonumber( ARGV[3] )
+local max_working_cycles    = tonumber( ARGV[4] )
 
-local STATUS_KEY            = 'C:S:'..coll_name;
-local DATA_VERSION_KEY      = '$_DATA_VERSION';
+local STATUS_KEY            = 'C:S:'..coll_name
+local DATA_VERSION_KEY      = '$_DATA_VERSION'
 
-local LIST                  = 'Test_list';
-local DATA                  = 'Data';
+local LIST                  = 'Test_list'
+local DATA                  = 'Data'
 
-redis.call( 'DEL', LIST );
+redis.call( 'DEL', LIST )
 
-local ret;
-local i = 1;
+local ret
+local i = 1
 while i < max_working_cycles do
     -- simple active actions
-    local data_version = redis.call( 'HGET', STATUS_KEY, DATA_VERSION_KEY );
-    ret = redis.call( 'HSET', LIST, i, DATA );
+    local data_version = redis.call( 'HGET', STATUS_KEY, DATA_VERSION_KEY )
+    ret = redis.call( 'HSET', LIST, i, DATA )
 
-    i = i + 1;
+    i = i + 1
 end
 
 if return_as_insert == 1 then
     _log_work( 'finish' )
-    return { $E_NO_ERROR, 0, 0, 0 };
+    return { $E_NO_ERROR, 0, 0, 0 }
 else
     _log_work( 'finish' )
-    return { $E_NO_ERROR, ret, '_long_term_operation' };
+    return { $E_NO_ERROR, ret, '_long_term_operation' }
 end
 END_LONG_TERM_OPERATION
 

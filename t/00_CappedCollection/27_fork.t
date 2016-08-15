@@ -672,7 +672,7 @@ sub open_connection {
             $error // '<undef>',
         ) )
         unless _INSTANCE( $collection, 'Redis::CappedCollection' );
-    BAIL_OUT( sprintf( '%s %scollection available',
+    BAIL_OUT( sprintf( '%s %scollection unavailable',
             get_time_str(),
             $ATTEMPTS ? "($ATTEMPTS CHILD ATTEMPTS remaining) " : '',
         ) )

@@ -54,7 +54,7 @@ my ( $coll, $coll_redis );
 
 const my $BUSY_ERROR            => 'BUSY Redis is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.';
 const my $NOT_CONNECTED_ERROR   => 'Not connected to any server';
-const my $MAX_ATTEMPTS          => 30;
+const my $MAX_ATTEMPTS          => 35;
 const my $HIRES_DELAY           => 0.1; # secs
 const my $MAX_HIRES_ATTEMPTS    => int( $MAX_ATTEMPTS / $HIRES_DELAY );
 
