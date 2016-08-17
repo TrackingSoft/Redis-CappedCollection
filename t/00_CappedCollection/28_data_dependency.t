@@ -12,11 +12,6 @@ use lib qw(
 use Test::More;
 plan 'no_plan';
 
-#FIXME:
-# - test HGET VALS
-# ? что в INFO может быть интересным
-# ? фиксировать загрузку CPU перед lua-скриптом
-# ? может быть иное интересное о системе для фиксации перед lua-скриптом
 #-- work conditions
 our (
     $_SERVER_ADDRESS,
@@ -230,7 +225,7 @@ if ( $collection ) {
         sprintf( '%0.2fmb', $MAX_DATA_SIZE / ( 1024 * 1024 ) ),
     );
 
-    testing( $collection );     # receive all data from list
+    testing( $collection );     # receive all values from list
     testing( $collection, 1 );  # single data_receive
 }
 
@@ -346,7 +341,7 @@ sub testing {
         get_time_str(),
         $single_data_receive
             ? 'single data receive'
-            : 'receive all data from list',
+            : 'receive all values (data) from list',
         $LIST_ITERATIONS,
         $STUFF_LENGTH,
         $MAX_LIST_LENGTH,
@@ -358,7 +353,7 @@ sub testing {
     foreach my $list_length ( @$list_lengths ) {
         my $stuff = fill_collection( $collection, $STUFF_LENGTH, $list_length );
         my $max_duration = test_collection( $collection, $stuff, $single_data_receive );
-        pass sprintf( '%s iteration %d/%d: list length = %s, max duration = %.3f sec',
+        pass sprintf( '%s iteration %d/%d: list length = %d, max duration = %.3f sec',
             get_time_str(),
             $i,
             $iterations,
@@ -366,21 +361,65 @@ sub testing {
             $max_duration,
         );
 
+        unless ( $single_data_receive ) {
+            my $full_list;
+            ( $max_duration, $full_list ) = test_full_list( $collection );
+            my $full_data_length = 0;
+            $full_data_length += length( $_ ) foreach @$full_list;
+            my %list = ( @$full_list );
+            my $list_length = scalar( keys %list );
+            my $real_list_length = $collection->list_info( $LIST_ID )->{items};
+            BAIL_OUT "Error in list length calculation: $list_length != $real_list_length" unless $list_length == $real_list_length;
+            pass sprintf( "\treceive full list: list length = %d, full data length = %d, max duration = %.3f sec",
+                $list_length,
+                $full_data_length,
+                $max_duration,
+            );
+        }
+
         ++$i;
     }
+}
+
+sub test_full_list {
+    my ( $collection ) = @_;
+
+    my ( @durations, $tm_start, $tm_finish, @data );
+    for ( my $i = 1; $i <= $OPERATIONS; ++$i ) {
+        @data = ();
+        try {
+            $tm_start = Time::HiRes::time();
+            @data = $collection->receive( $LIST_ID, '' );   # '' for receive all data (keys and values)
+            $tm_finish = Time::HiRes::time();
+        } catch {
+            my $error = $_;
+            BAIL_OUT get_time_str()." BAD full list receive: $error";
+        };
+        BAIL_OUT( get_time_str()." full list receive: BAD - received empty data list" )
+            unless @data;
+
+        # WARN: because redis lua-memory may be corrupted
+        Redis::CappedCollection::_clear_sha1( $collection->_redis );
+
+        push @durations, $tm_finish - $tm_start;
+        say "$i/$OPERATIONS" unless $i % 5_000;
+    }
+
+    my $max_duration = max( @durations );
+    return( $max_duration, \@data );
 }
 
 sub test_collection {
     my ( $collection, $stuff, $single_data_receive ) = @_;
 
     my ( @durations, $tm_start, $tm_finish );
-    for ( 1 .. $OPERATIONS ) {
+    for ( my $i = 1; $i <= $OPERATIONS; ++$i ) {
         if ( $single_data_receive ) {
             my $data_id = $DATA_IDS[ int( rand scalar @DATA_IDS ) ];
             my $data;
             try {
                 $tm_start = Time::HiRes::time();
-                $data = $collection->receive( $LIST_ID, $data_id );
+                $data = $collection->receive( $LIST_ID, $data_id ); # receive single data
                 $tm_finish = Time::HiRes::time();
             } catch {
                 my $error = $_;
@@ -392,7 +431,7 @@ sub test_collection {
             my @data;
             try {
                 $tm_start = Time::HiRes::time();
-                @data = $collection->receive( $LIST_ID );
+                @data = $collection->receive( $LIST_ID );   # receive only values
                 $tm_finish = Time::HiRes::time();
             } catch {
                 my $error = $_;
@@ -406,6 +445,7 @@ sub test_collection {
         }
 
         push @durations, $tm_finish - $tm_start;
+        say "$i/$OPERATIONS" unless $i % 5_000;
     }
 
     my $max_duration = max( @durations );
@@ -583,7 +623,7 @@ sub get_max_list_info {
             list_id => $list_id,
             items   => $items,
         ) if $items > ( $longest_list{items} // 0 );
-        my %all_data = ( $collection->receive( $list_id, '' ) );
+        my %all_data = ( $collection->receive( $list_id, '' ) );    # '' for receive all data (keys and values)
         while ( my ( $data_id, $data) = each %all_data ) {
             my $data_length = length $data;
             %longest_data = (

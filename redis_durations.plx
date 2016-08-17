@@ -5,19 +5,16 @@ use strict;
 
 use Date::Parse;
 
-my $MIN_DISPLAYED_DURATION = 0.040; # sec
+my $MIN_DISPLAYED_DURATION = 0.1; # sec (100 ms)
 
-my ( $tm_start, $tm_finish, $prev_script, $operation, $start_line, @cleaned );
+my ( $tm_start, $tm_finish, $prev_script, $operation, $start_line, @previous_lines );
 while ( <> ) {
     my $line = $_;
+    chomp $line;
 
-    if (
-               $line =~ / lua-script (start|finish): (\S+)/
-            || $line =~ / cleaned: (\d+) bytes, (\d+) items'/
-        ) {
+    if ( $line =~ / lua-script (start|finish): (\S+)/ ) {
         my $first_val   = $1;
         my $second_val  = $2;
-        next if $second_val eq 'upsert';
 
         ++$operation;
         my $tm = get_time( $line );
@@ -25,38 +22,35 @@ while ( <> ) {
             $tm_start = $tm;
             $prev_script = $second_val;
             $start_line = $line;
-            @cleaned = ();
         } elsif ( defined( $tm_start ) && $second_val eq $prev_script && $first_val eq 'finish' ) {
             $tm_finish = $tm;
             my $duration = $tm_finish - $tm_start;
             if ( $duration >= $MIN_DISPLAYED_DURATION ) {
-                chomp $line;
-                say sprintf( "operation = %d, '%s' duration: %.3f,\n\tstart line = %s\n\tfinish line = '%s'",
+                say sprintf( "operation = %d, '%s' duration: %.3f",
                     $operation,
                     $second_val,
                     $duration,
-                    $start_line,
-                    $line,
                 );
-                if ( @cleaned ) {
-                    say "\n\tprevious cleaned:";
-                    say "\n\t$_" foreach @cleaned;
-                }
+                unshift @previous_lines, $start_line;
+                push @previous_lines, $line;
+                say "\t$_" foreach @previous_lines;
             }
             undef $tm_start;
             undef $prev_script;
-            @cleaned = ();
-        } elsif ( $first_val =~ /^\d+$/ ) {
-            push @cleaned, $line;
         } else {
-            chomp $line;
-            warn sprintf( "not synchronized line: '%s', tm_start = %s, prev_script = '%s'",
-                $line,
+            warn sprintf( "not synchronized line: tm_start = %s, prev_script = '%s'",
                 $tm_start // '<undef>',
                 $prev_script // '<undef>',
             );
+            push @previous_lines, $line;
+            say "\t$_" foreach @previous_lines;
         }
+
+        @previous_lines = ();
+        next;
     }
+
+    push @previous_lines, $line;
 }
 
 sub get_time {

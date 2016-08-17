@@ -457,43 +457,15 @@ my $_lua_time_key   = "local TIME_KEY   = TIME_KEYS..':'..list_id";
 
 my %lua_script_body;
 
+my $_lua_first_step = <<"END_FIRST_STEP";
+collectgarbage( 'stop' )
+
+__START_STEP__
+END_FIRST_STEP
+
 my $_lua_log_work_function = <<"END_LOG_WORK_FUNCTION";
 local _SCRIPT_NAME
 local _DEBUG_LEVEL = tonumber( ARGV[1] )
-
-local table_val_to_str = function ( v )
-    if "string" == type( v ) then
-        v = string.gsub( v, "\\n", "\\\\n" )
-        if string.match( string.gsub( v, "[^'\\"]", "" ), '^"+\$' ) then
-            return "'" .. v .. "'"
-        end
-        return '"' .. string.gsub( v, '"', '\\\\"' ) .. '"'
-    else
-        return "table" == type( v ) and table_tostring( v ) or tostring( v )
-    end
-end
-
-local table_key_to_str = function ( k )
-    if "string" == type( k ) and string.match( k, "^[_%a][_%a%d]*\$" ) then
-        return k
-    else
-        return "[" .. table_val_to_str( k ) .. "]"
-    end
-end
-
-local table_tostring = function ( tbl )
-    local result, done = {}, {}
-    for k, v in ipairs( tbl ) do
-        table.insert( result, table_val_to_str( v ) )
-        done[ k ] = true
-    end
-    for k, v in pairs( tbl ) do
-        if not done[ k ] then
-            table.insert( result, table_key_to_str( k ) .. "=" .. table_val_to_str( v ) )
-        end
-    end
-    return "{" .. table.concat( result, "," ) .. "}"
-end
 
 local _log_work = function ( log_str, script_name )
     if script_name ~= nil then
@@ -502,15 +474,11 @@ local _log_work = function ( log_str, script_name )
 
     if _DEBUG_LEVEL >= $SCRIPT_DEBUG_LEVEL then
         if script_name ~= nil then
-            local args_str = table_tostring( ARGV )
+            local args_str = cjson.encode( ARGV )
             redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '..script_name..' ('..args_str..')' )
         else
             redis.log( redis.LOG_NOTICE, 'lua-script '..log_str..': '.._SCRIPT_NAME )
         end
-    end
-
-    if log_str == 'finish' then
-        collectgarbage()
     end
 end
 END_LOG_WORK_FUNCTION
@@ -541,7 +509,7 @@ if #arr > 0 then
 
 end
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return ret
 END_CLEAN_DATA
 
@@ -646,7 +614,7 @@ local cleaning_error = function ( error_msg )
     end
     -- Level 2 points the error to where the function that called error was called
     renew_last_cleanup_values()
-    _log_work( 'finish' )
+    __FINISH_STEP__
     error( error_msg, 2 )
 end
 
@@ -682,7 +650,7 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
             -- Level 2 points the error to where the function that called error was called
             renew_last_cleanup_values()
-            _log_work( 'finish' )
+            __FINISH_STEP__
             error( 'Queue key does not exist', 2 )
         end
 
@@ -821,10 +789,6 @@ local cleaning = function ( list_id, data_id, is_cleaning_needed )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_MAXMEMORY', REDIS_MAXMEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_USED_MEMORY', REDIS_USED_MEMORY )
         redis.call( 'HSET', STATUS_KEY, '$_LAST_CLEANUP_BYTES_MUST_BE_DELETED', LAST_CLEANUP_BYTES_MUST_BE_DELETED )
-
-        if _DEBUG_LEVEL >= $SCRIPT_DEBUG_LEVEL then
-            redis.log( redis.LOG_NOTICE, 'cleaned: '..TOTAL_BYTES_DELETED..' bytes, '..LAST_CLEANUP_ITEMS..' items' )
-        end
     end
 end
 
@@ -835,7 +799,7 @@ local call_with_error_control = function ( list_id, data_id, ... )
     repeat
         ret = redis.pcall( ... )
         if type( ret ) == 'table' and ret.err ~= nil then
-            error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. table_tostring( { ... } ) .. ")"
+            error_msg   = "$REDIS_MEMORY_ERROR_MSG - " .. ret.err .. " (call = " .. cjson.encode( { ... } ) .. ")"
             if _DEBUG then
                 _debug_log( {
                     _STEP       = 'call_with_error_control',
@@ -863,11 +827,8 @@ local call_with_error_control = function ( list_id, data_id, ... )
 end
 END_CLEANING
 
-$lua_script_body{insert} = <<"END_INSERT";
-$_lua_log_work_function
-_log_work( 'start', 'insert', ARGV )
-
--- adding data to a list of collections
+my $_lua_pre_upsert = <<"END_PRE_UPSERT";
+$_lua_first_step
 
 local coll_name             = ARGV[2]
 local list_id               = ARGV[3]
@@ -883,16 +844,19 @@ $_lua_data_keys
 $_lua_time_keys
 $_lua_data_key
 $_lua_time_key
+$_lua_cleaning
+END_PRE_UPSERT
 
+my $_lua_insert_body = <<"END_INSERT_BODY";
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_DATA_ID_EXISTS, 0, 0, 0 }
 end
 
@@ -902,14 +866,13 @@ local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMO
 if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
     if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
         if data_time < last_removed_time then
-            _log_work( 'finish' )
+            __FINISH_STEP__
             return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
         end
     end
 end
 
 -- deleting obsolete data, if it is necessary
-$_lua_cleaning
 local data_len = #data
 _setup( 7, 'insert', data_len ) -- 7 -> is the index of ARGV[7]
 cleaning( list_id, data_id, false )
@@ -955,38 +918,24 @@ renew_last_cleanup_values()
 INSERTS_SINCE_CLEANING = INSERTS_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_INSERTS_SINCE_CLEANING', INSERTS_SINCE_CLEANING )
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
+END_INSERT_BODY
+
+$lua_script_body{insert} = <<"END_INSERT";
+-- adding data to a list of collections
+$_lua_pre_upsert
+$_lua_insert_body
 END_INSERT
 
-$lua_script_body{update} = <<"END_UPDATE";
-$_lua_log_work_function
-_log_work( 'start', 'update' )
-
--- update the data in the list of collections
-
-local coll_name             = ARGV[2]
-local list_id               = ARGV[3]
-local data_id               = ARGV[4]
-local data                  = ARGV[5]
-local new_data_time         = tonumber( ARGV[6] )
-
--- key data storage structures
-$_lua_namespace
-$_lua_queue_key
-$_lua_status_key
-$_lua_data_keys
-$_lua_time_keys
-$_lua_data_key
-$_lua_time_key
-
+my $_lua_update_body = <<"END_UPDATE_BODY";
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 local extra_data_len
@@ -999,27 +948,26 @@ if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
     extra_data_len = data_len - #existed_data
     existed_data = nil  -- free memory
 else
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
 local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
 if tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) ) == 0 then
-    if new_data_time ~= 0 and new_data_time < last_removed_time then
-        _log_work( 'finish' )
+    if data_time ~= 0 and data_time < last_removed_time then
+        __FINISH_STEP__
         return { $E_OLDER_THAN_ALLOWED, 0, 0, 0 }
     end
 end
 
 -- deleting obsolete data, if it can be necessary
-$_lua_cleaning
 _setup( 7, 'update', extra_data_len )   -- 7 is the index of ARGV[7]
 cleaning( list_id, data_id, false )
 
 -- data change
 -- Remember that the list and the collection can be automatically deleted after the "crowding out" old data
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
 end
 
@@ -1029,16 +977,16 @@ end
 call_with_error_control( list_id, data_id, 'HSET', DATA_KEY, data_id, data )
 data = nil  -- free memory
 
-if new_data_time ~= 0 then
+if data_time ~= 0 then
     if redis.call( 'HLEN', DATA_KEY ) == 1 then
-        redis.call( 'ZADD', QUEUE_KEY, new_data_time, list_id )
+        redis.call( 'ZADD', QUEUE_KEY, data_time, list_id )
     else
-        redis.call( 'ZADD', TIME_KEY, new_data_time, data_id )
+        redis.call( 'ZADD', TIME_KEY, data_time, data_id )
         local oldest_item_time = tonumber( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' )[2] )
         redis.call( 'ZADD', QUEUE_KEY, oldest_item_time, list_id )
     end
 
-    if new_data_time < last_removed_time then
+    if data_time < last_removed_time then
         redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', 0 )
     end
 end
@@ -1047,46 +995,40 @@ renew_last_cleanup_values()
 UPDATES_SINCE_CLEANING = UPDATES_SINCE_CLEANING + 1
 redis.call( 'HSET', STATUS_KEY, '$_UPDATES_SINCE_CLEANING', UPDATES_SINCE_CLEANING )
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
+END_UPDATE_BODY
+
+$lua_script_body{update} = <<"END_UPDATE";
+-- update the data in the list of collections
+$_lua_pre_upsert
+$_lua_update_body
 END_UPDATE
 
 $lua_script_body{upsert} = <<"END_UPSERT";
-$_lua_log_work_function
-_log_work( 'start', 'upsert' )
-
 -- update or insert the data in the list of collections
-
-local coll_name             = ARGV[2]
-local list_id               = ARGV[3]
-local data_id               = ARGV[4]
-local data_time             = tonumber( ARGV[6] )
-local start_time            = ARGV[8]
-
--- key data storage structures
-$_lua_namespace
-$_lua_data_keys
-$_lua_data_key
+$_lua_pre_upsert
+local start_time = tonumber( ARGV[8] )
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
     if data_time == -1 then
-        ARGV[6] = '0'
+        data_time = 0
     end
-    $lua_script_body{update}
+    -- Run update now
+    $_lua_update_body
 else
     if data_time == -1 then
-        ARGV[6] = start_time
+        data_time = start_time
     end
-    $lua_script_body{insert}
+    -- Run insert now
+    $_lua_insert_body
 end
 END_UPSERT
 
 $lua_script_body{receive} = <<"END_RECEIVE";
-$_lua_log_work_function
-_log_work( 'start', 'receive' )
-
 -- returns the data from the list
+$_lua_first_step
 
 local coll_name             = ARGV[2]
 local list_id               = ARGV[3]
@@ -1102,7 +1044,7 @@ $_lua_data_key
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return nil
 end
 
@@ -1124,15 +1066,13 @@ else
     ret = nil
 end
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return ret
 END_RECEIVE
 
 $lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
-$_lua_log_work_function
-_log_work( 'start', 'pop_oldest' )
-
 -- retrieve the oldest data stored in the collection
+$_lua_first_step
 
 local coll_name             = ARGV[2]
 
@@ -1144,11 +1084,11 @@ $_lua_status_key
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     -- sort of a mistake
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 if redis.call( 'EXISTS', QUEUE_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NO_ERROR, false, nil, nil }
 end
 
@@ -1168,7 +1108,7 @@ $_lua_time_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, nil, nil, nil }
 end
 
@@ -1220,15 +1160,13 @@ end
 redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -1 )
 redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', last_removed_time )
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
 
 $lua_script_body{collection_info} = <<"END_COLLECTION_INFO";
-$_lua_log_work_function
-_log_work( 'start', 'collection_info' )
-
 -- to obtain information on the status of the collection
+$_lua_first_step
 
 local coll_name     = ARGV[2]
 
@@ -1239,7 +1177,7 @@ $_lua_status_key
 
 -- determine whether there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
 end
 
@@ -1257,7 +1195,7 @@ local lists, items, older_allowed, cleanup_bytes, cleanup_items, memory_reserve,
 
 if type( data_version ) ~= 'string' then data_version = '0' end
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return {
     $E_NO_ERROR,
     lists,
@@ -1273,10 +1211,8 @@ return {
 END_COLLECTION_INFO
 
 $lua_script_body{oldest_time} = <<"END_OLDEST_TIME";
-$_lua_log_work_function
-_log_work( 'start', 'oldest_time' )
-
 -- to obtain time corresponding to the oldest data in the collection
+$_lua_first_step
 
 local coll_name = ARGV[2]
 
@@ -1287,20 +1223,18 @@ $_lua_status_key
 
 -- determine whe, falther there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, false }
 end
 
 local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, oldest_item_time }
 END_OLDEST_TIME
 
 $lua_script_body{list_info} = <<"END_LIST_INFO";
-$_lua_log_work_function
-_log_work( 'start', 'list_info' )
-
 -- to obtain information on the status of the data list
+$_lua_first_step
 
 local coll_name             = ARGV[2]
 local list_id               = ARGV[3]
@@ -1314,11 +1248,11 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, false, nil }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NO_ERROR, false, nil }
 end
 
@@ -1328,15 +1262,13 @@ local items = redis.call( 'HLEN', DATA_KEY )
 -- the second data
 local oldest_item_time = redis.call( 'ZSCORE', QUEUE_KEY, list_id )
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, items, oldest_item_time }
 END_LIST_INFO
 
 $lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
-$_lua_log_work_function
-_log_work( 'start', 'drop_collection' )
-
 -- to remove the entire collection
+$_lua_first_step
 
 local coll_name     = ARGV[2]
 
@@ -1356,10 +1288,8 @@ $_lua_clean_data
 END_DROP_COLLECTION
 
 $lua_script_body{clear_collection} = <<"END_CLEAR_COLLECTION";
-$_lua_log_work_function
-_log_work( 'start', 'clear_collection' )
-
 -- to remove the entire collection data
+$_lua_first_step
 
 local coll_name     = ARGV[2]
 
@@ -1381,10 +1311,8 @@ $_lua_clean_data
 END_CLEAR_COLLECTION
 
 $lua_script_body{drop_list} = <<"END_DROP_LIST";
-$_lua_log_work_function
-_log_work( 'start', 'drop_list' )
-
 -- to remove the data_list
+$_lua_first_step
 
 local coll_name     = ARGV[2]
 local list_id       = ARGV[3]
@@ -1398,11 +1326,11 @@ $_lua_data_key
 
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_COLLECTION_DELETED, 0 }
 end
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NO_ERROR, 0 }
 end
 
@@ -1429,15 +1357,13 @@ redis.call( 'HINCRBY', STATUS_KEY, '$_LISTS', -1 )
 -- remove the name of the list from the queue collection
 redis.call( 'ZREM', QUEUE_KEY, list_id )
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return { $E_NO_ERROR, 1 }
 END_DROP_LIST
 
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
-$_lua_log_work_function
-_log_work( 'start', 'verify_collection' )
-
 -- creation of the collection and characterization of the collection by accessing existing collection
+$_lua_first_step
 
 local coll_name         = ARGV[2]
 local older_allowed     = ARGV[3]
@@ -1481,7 +1407,7 @@ else
     )
 end
 
-_log_work( 'finish' )
+__FINISH_STEP__
 return {
     status_exist,
     older_allowed,
@@ -1493,8 +1419,7 @@ return {
 END_VERIFY_COLLECTION
 
 $lua_script_body{_long_term_operation} = <<"END_LONG_TERM_OPERATION";
-$_lua_log_work_function
-_log_work( 'start', '_long_term_operation' )
+$_lua_first_step
 
 local coll_name             = ARGV[2]
 local return_as_insert      = tonumber( ARGV[3] )
@@ -1519,10 +1444,10 @@ while i < max_working_cycles do
 end
 
 if return_as_insert == 1 then
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NO_ERROR, 0, 0, 0 }
 else
-    _log_work( 'finish' )
+    __FINISH_STEP__
     return { $E_NO_ERROR, ret, '_long_term_operation' }
 end
 END_LONG_TERM_OPERATION
@@ -3565,6 +3490,7 @@ sub _throw {
 
 {
     my ( $_running_script_name, $_running_script_body );
+    my %script_prepared;
 
     sub _lua_script_cmd {
         my ( $self, $redis );
@@ -3576,10 +3502,31 @@ sub _throw {
         }
 
         $_running_script_name = shift;
-        $_running_script_body = $lua_script_body{ $_running_script_name };
-
         my $sha1 = $_lua_scripts->{ $redis }->{ $_running_script_name };
         unless ( $sha1 ) {
+            unless ( $script_prepared{ $_running_script_name } ) {
+                my ( $start_str, $finish_str );
+                if ( $DEBUG ) {
+                    $start_str  = "
+${_lua_log_work_function}
+_log_work( 'start', '$_running_script_name', ARGV )
+";
+                    $finish_str = "
+_log_work( 'finish' )
+";
+                } else {
+                    $finish_str = $start_str = '';
+                }
+
+                {
+                    local $/ = '';
+                    $lua_script_body{ $_running_script_name } =~ s/\n+\s*__START_STEP__\n/$start_str/g;
+                    $lua_script_body{ $_running_script_name } =~ s/\n+\s*__FINISH_STEP__/$finish_str/g;
+                }
+                $script_prepared{ $_running_script_name } = 1;
+            }
+
+            $_running_script_body = $lua_script_body{ $_running_script_name };
             $sha1 = $_lua_scripts->{ $redis }->{ $_running_script_name } = sha1_hex( $_running_script_body );
             my $ret;
             if ( $self ) {
