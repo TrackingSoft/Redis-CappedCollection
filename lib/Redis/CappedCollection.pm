@@ -1582,7 +1582,11 @@ sub BUILD {
 
     $self->_connection_timeout_trigger( $self->connection_timeout );
     $self->_operation_timeout_trigger( $self->operation_timeout );
-    $self->_redis->connect if $self->_redis->{no_auto_connect_on_new};
+    $self->_redis->connect if
+           exists( $self->_redis->{no_auto_connect_on_new} )
+        && $self->_redis->{no_auto_connect_on_new}
+        && !$self->_redis->{sock}
+    ;
 
     if ( $self->_create_from_naked_new ) {
         warn 'Redis::CappedCollection->new() is deprecated and will be removed in future. Please use either create() or open() instead.';
@@ -3340,7 +3344,11 @@ sub _get_redis {
 
     $redis = _redis_constructor( $redis )
         unless _INSTANCE( $redis, 'Redis' );
-    $redis->connect if exists( $redis->{no_auto_connect_on_new} ) && $redis->{no_auto_connect_on_new};
+    $redis->connect if
+        exists( $redis->{no_auto_connect_on_new} )
+        && $redis->{no_auto_connect_on_new}
+        && !$redis->{sock}
+    ;
 
     return $redis;
 }
