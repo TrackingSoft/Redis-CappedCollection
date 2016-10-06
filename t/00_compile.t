@@ -63,4 +63,5 @@ ok( defined( $_ ), "import OK: $_" ) foreach qw(
     $E_DATA_ID_EXISTS
     $E_OLDER_THAN_ALLOWED
     $E_NONEXISTENT_DATA_ID
+    $E_NOSCRIPT
     );

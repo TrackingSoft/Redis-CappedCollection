@@ -79,6 +79,7 @@ use Redis '1.976';
 use Redis::CappedCollection::Util qw(
     format_message
 );
+use Time::HiRes ();
 use Try::Tiny;
 
 class_type 'Redis';
@@ -272,14 +273,14 @@ Possible error codes:
 
 =item C<$E_NO_ERROR>
 
-0 - No error
+-1000 - No error
 
 =cut
 const our $E_NO_ERROR           => -1000;
 
 =item C<$E_MISMATCH_ARG>
 
-1 - Invalid argument.
+-1001 - Invalid argument.
 
 Thrown by methods when there is a missing required argument or argument value is invalid.
 
@@ -288,21 +289,21 @@ const our $E_MISMATCH_ARG       => -1001;
 
 =item C<$E_DATA_TOO_LARGE>
 
-2 - Data is too large.
+-1002 - Data is too large.
 
 =cut
 const our $E_DATA_TOO_LARGE     => -1002;
 
 =item C<$E_NETWORK>
 
-3 - Error in connection to Redis server.
+-1003 - Error in connection to Redis server.
 
 =cut
 const our $E_NETWORK            => -1003;
 
 =item C<$E_MAXMEMORY_LIMIT>
 
-4 - Command not allowed when used memory > 'maxmemory'.
+-1004 - Command not allowed when used memory > 'maxmemory'.
 
 This means that the command is not allowed when used memory > C<maxmemory>
 in the F<redis.conf> file.
@@ -312,7 +313,7 @@ const our $E_MAXMEMORY_LIMIT    => -1004;
 
 =item C<$E_MAXMEMORY_POLICY>
 
-5 - Redis server have incompatible C<maxmemory-policy> setting.
+-1005 - Redis server have incompatible C<maxmemory-policy> setting.
 
 Thrown when Redis server have incompatible C<maxmemory-policy> setting in F<redis.conf>.
 
@@ -321,7 +322,7 @@ const our $E_MAXMEMORY_POLICY   => -1005;
 
 =item C<$E_COLLECTION_DELETED>
 
-6 - Collection elements was removed prior to use.
+-1006 - Collection elements was removed prior to use.
 
 This means that the system part of the collection was removed prior to use.
 
@@ -330,7 +331,7 @@ const our $E_COLLECTION_DELETED => -1006;
 
 =item C<$E_REDIS>
 
-7 - Redis error message.
+-1007 - Redis error message.
 
 This means that other Redis error message detected.
 
@@ -339,7 +340,7 @@ const our $E_REDIS              => -1007;
 
 =item C<$E_DATA_ID_EXISTS>
 
-8 - Attempt to add data with an existing ID
+-1008 - Attempt to add data with an existing ID
 
 This means that you are trying to insert data with an ID that is already in
 the data list.
@@ -349,7 +350,7 @@ const our $E_DATA_ID_EXISTS     => -1008;
 
 =item C<$E_OLDER_THAN_ALLOWED>
 
-9 - Attempt to add outdated data
+-1009 - Attempt to add outdated data
 
 This means that you are trying to insert the data with the time older than
 the time of the oldest element currently stored in collection.
@@ -359,7 +360,7 @@ const our $E_OLDER_THAN_ALLOWED => -1009;
 
 =item C<$E_NONEXISTENT_DATA_ID>
 
-10 - Attempt to access the elements missing in the collection.
+-1010 - Attempt to access the elements missing in the collection.
 
 This means that you are trying to update data which does not exist.
 
@@ -368,7 +369,7 @@ const our $E_NONEXISTENT_DATA_ID    => -1010;
 
 =item C<$E_INCOMP_DATA_VERSION>
 
-11 - Attempt to access the collection with incompatible data structure, created
+-1011 - Attempt to access the collection with incompatible data structure, created
 by an older or newer version of this module.
 
 =cut
@@ -376,7 +377,7 @@ const our $E_INCOMP_DATA_VERSION    => -1011;
 
 =item C<$E_REDIS_DID_NOT_RETURN_DATA>
 
-12 - The Redis server did not return data.
+-1012 - The Redis server did not return data.
 
 Check the settings in the file F<redis.conf>.
 
@@ -385,7 +386,7 @@ const our $E_REDIS_DID_NOT_RETURN_DATA  => -1012;
 
 =item C<$E_UNKNOWN_ERROR>
 
-13 - Unknown error.
+-1013 - Unknown error.
 
 Possibly you should modify the constructor parameters for more intense automatic memory release.
 
@@ -1520,8 +1521,8 @@ This example illustrates a C<create()> call with all the valid arguments:
                         # Not used when 'maxmemory' == 0 (it is not set in the redis.conf).
                         # When you add or modify the data trying to ensure
                         # reserve of free memory for metadata and bookkeeping.
-        reconnect_on_error  => 0,   # Controls ability to force re-connection with Redis on error.
-                        # Boolean argument (default is false).
+        reconnect_on_error  => 1,   # Controls ability to force re-connection with Redis on error.
+                        # Boolean argument - default is true and conservative_reconnect is true.
         connection_timeout  => $DEFAULT_CONNECTION_TIMEOUT,    # Socket timeout for connection,
                         # number of seconds (can be fractional).
                         # NOTE: Changes external socket configuration.
@@ -2057,7 +2058,6 @@ sub insert {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } elsif (
                    $error == $E_DATA_ID_EXISTS
@@ -2065,7 +2065,6 @@ sub insert {
             ) {
             $self->_throw( $error );
         } else {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2170,10 +2169,8 @@ sub update {
                 || $error == $E_DATA_ID_EXISTS
                 || $error == $E_OLDER_THAN_ALLOWED
             ) {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } else {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2240,7 +2237,6 @@ sub upsert {
         if ( $error == $E_NO_ERROR ) {
             # Normal result: Nothing to do
         } elsif ( $error == $E_COLLECTION_DELETED ) {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error );
         } elsif (
                    $error == $E_DATA_ID_EXISTS
@@ -2250,7 +2246,6 @@ sub upsert {
         } elsif ( $error == $E_NONEXISTENT_DATA_ID ) {
             # Nothing to do
         } else {
-            _clear_sha1( $self->_redis );
             $self->_throw( $error, 'Unexpected error' );
         }
     } else {
@@ -2387,7 +2382,6 @@ sub pop_oldest {
     my ( $error, $queue_exist, $to_delete_id, $to_delete_data ) = @ret;
 
     if ( exists $ERROR{ $error } ) {
-        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -2555,7 +2549,6 @@ sub collection_info {
         my $error = $results->{error};
 
         if ( exists $ERROR{ $error } ) {
-            _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
             $self->_throw( $error ) if $error != $E_NO_ERROR;
         } else {
             $self->_process_unknown_error( @ret );
@@ -2587,7 +2580,6 @@ sub collection_info {
 
         if ( exists $ERROR{ $error } ) {
             if ( $error != $E_NO_ERROR ) {
-                _clear_sha1( $redis );
                 _croak( format_message( "Collection '%s' info not received (%s)", $name, $ERROR{ $error } ) );
             }
         } else {
@@ -2651,7 +2643,6 @@ sub list_info {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -2695,7 +2686,6 @@ sub oldest_time {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -3009,7 +2999,6 @@ sub drop_collection {
         );
 
         $self->_clear_name;
-        _clear_sha1( $self->_redis );
     } else {
         shift if _CLASSISA( $_[0], __PACKAGE__ );   # allow calling Foo->bar as well as Foo::bar
 
@@ -3029,7 +3018,6 @@ sub drop_collection {
             $DEBUG,
             $name,
         );
-        _clear_sha1( $redis );
     }
 
     return $ret;
@@ -3072,7 +3060,6 @@ sub drop_list {
     my $error = $results->{error};
 
     if ( exists $ERROR{ $error } ) {
-        _clear_sha1( $self->_redis ) if $error == $E_COLLECTION_DELETED;
         $self->_throw( $error ) if $error != $E_NO_ERROR;
     } else {
         $self->_process_unknown_error( @ret );
@@ -3163,7 +3150,6 @@ sub quit {
     return if $] >= 5.14 && ${^GLOBAL_PHASE} eq 'DESTRUCT';
 
     $self->_set_last_errorcode( $E_NO_ERROR );
-    _clear_sha1( $self->_redis );
     $self->_redis->quit unless $self->_use_external_connection;
 
     return;
@@ -3377,7 +3363,6 @@ sub _long_term_operation {
             if ( $error == $E_NO_ERROR ) {
                 # Normal result: Nothing to do
             } elsif ( $error == $E_COLLECTION_DELETED ) {
-                _clear_sha1( $self->_redis );
                 $self->_throw( $error );
             } elsif (
                        $error == $E_DATA_ID_EXISTS
@@ -3385,7 +3370,6 @@ sub _long_term_operation {
                 ) {
                 $self->_throw( $error );
             } else {
-                _clear_sha1( $self->_redis );
                 $self->_throw( $error, 'Unexpected error' );
             }
         } else {
@@ -3467,7 +3451,6 @@ sub _reconnect {
         } catch {
             my $error = $_;
             $err_msg = "(Not reconnected: $error)";
-            _clear_sha1( $redis );
         };
     }
 
@@ -3483,8 +3466,6 @@ sub _reconnect {
 sub _throw {
     my ( $self, $err, $prefix ) = @_;
 
-    $prefix = _reconnect( $self->_redis, $err, $prefix ) if $self->reconnect_on_error;
-
     if ( exists $ERROR{ $err } ) {
         $self->_set_last_errorcode( $err );
         _croak( format_message( '%s%s', ( $prefix ? "$prefix : " : '' ), $ERROR{ $err } ) );
@@ -3496,8 +3477,9 @@ sub _throw {
     return;
 }
 
+my $_running_script_name;
 {
-    my ( $_running_script_name, $_running_script_body );
+    my $_running_script_body;
     my %script_prepared;
 
     sub _lua_script_cmd {
@@ -3557,7 +3539,7 @@ _log_work( 'finish' )
         if ( $self ) {
             # Use the error messages from Redis.pm
             if (
-                       $error =~ /Could not connect to Redis server at /    # not in start if not reconnected
+                       $error =~ /Could not connect to Redis server at /
                     || $error =~ /^Can't close socket: /
                     || $error =~ /^Not connected to any server/
                     # Maybe for pub/sub only
@@ -3569,12 +3551,17 @@ _log_work( 'finish' )
                 # For connection problem
                 $err_msg = _reconnect( $self->_redis, $E_UNKNOWN_ERROR, $err_msg ) if $self->reconnect_on_error;
             } elsif (
+                    $error =~ /^\[[^]]+\]\s+NOSCRIPT No matching script. Please use EVAL./
+                ) {
+                _clear_sha1( $self->_redis );
+
+                # No connection problem
+                return 1;
+            } elsif (
                        $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_MEMORY_ERROR_MSG\E/i
                     || $error =~ /^\[[^]]+\]\s+-?\Q$REDIS_ERROR_CODE $ERROR{ $E_MAXMEMORY_LIMIT }\E/i
-                    || $error =~ /^\[[^]]+\]\s+-NOSCRIPT No matching script. Please use EVAL./
                 ) {
                 $self->_set_last_errorcode( $E_MAXMEMORY_LIMIT );
-                _clear_sha1( $self->_redis );
 
                 # No connection problem
             } elsif ( $error =~ /^\[[^]]+\]\s+BUSY Redis is busy running a script/ ){
@@ -3648,12 +3635,14 @@ sub _redis_setup {
     my $conf = shift;
 
     # defaults for the case when the Redis object we create
-    $conf->{reconnect}              = 0     unless exists $conf->{reconnect};
+    $conf->{reconnect}              = 1     unless exists $conf->{reconnect};
     $conf->{every}                  = 1000  unless exists $conf->{every};                   # 1 ms
-    $conf->{conservative_reconnect} = 0     unless exists $conf->{conservative_reconnect};
+    $conf->{conservative_reconnect} = 1     unless exists $conf->{conservative_reconnect};
 
-    $conf->{cnx_timeout}    = $conf->{cnx_timeout}  || ( $self ? $self->connection_timeout : undef ) || $DEFAULT_CONNECTION_TIMEOUT;
-    $conf->{read_timeout}   = $conf->{read_timeout} || ( $self ? $self->operation_timeout : undef )  || $DEFAULT_OPERATION_TIMEOUT;
+    $conf->{cnx_timeout}    = ( $self ? $self->connection_timeout : undef ) || $DEFAULT_CONNECTION_TIMEOUT
+        unless $conf->{cnx_timeout};
+    $conf->{read_timeout}   =  ( $self ? $self->operation_timeout : undef )  || $DEFAULT_OPERATION_TIMEOUT
+        unless $conf->{read_timeout};
     $conf->{write_timeout}  = $conf->{read_timeout};
 
     if ( $self ) {
@@ -3681,13 +3670,7 @@ sub _parameters_2_str {
 sub _call_redis {
     my ( $self, $redis );
     if ( _INSTANCE( $_[0], __PACKAGE__ ) ) {    # allow calling $obj->bar
-        $self = shift;
-
-        if ( $self->reconnect_on_error && !$self->ping ) {
-            my $err_msg = _reconnect( $self->_redis );
-            _croak( format_message( '%s: %s', $ERROR{$E_REDIS}, $err_msg ) ) if $err_msg;
-        }
-
+        $self  = shift;
         $redis = $self->_redis;
     } else {                                    # allow calling Foo::bar
         $redis = shift;
@@ -3699,17 +3682,27 @@ sub _call_redis {
     $self->_wait_used_memory if $self && $method =~ /^EVAL/i;
 
     my @return;
+    my $try_again;
     my @args = @_;
-    try {
-        @return = $redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
-    } catch {
-        my $error = $_;
-        if ( $self ) {
-            $self->_redis_exception( $error );
-        } else {
-            _redis_exception( $error );
+    RUN_METHOD: {
+        try {
+            @return = $redis->$method( map { ref( $_ ) ? $$_ : $_ } @args );
+        } catch {
+            my $error = $_;
+            if ( $self ) {
+                $try_again = $self->_redis_exception( $error );
+            } else {
+                $try_again = _redis_exception( $error );
+            }
+        };
+
+        if ( $try_again && $method eq 'EVALSHA' ) {
+            $_lua_scripts->{ $redis }->{ $_running_script_name } = $args[0];    # sha1
+            $args[0] = $lua_script_body{ $_running_script_name };
+            $method = 'EVAL';
+            redo RUN_METHOD;
         }
-    };
+    }
 
     unless ( scalar @return ) {
         $self->_set_last_errorcode( $E_REDIS_DID_NOT_RETURN_DATA )

@@ -298,12 +298,12 @@ $coll = Redis::CappedCollection->create(
 );
 isa_ok( $coll, 'Redis::CappedCollection' );
 
-$coll->quit;
+$coll->quit;    # see $coll->_use_external_connection
 
-dies_ok {
+lives_ok {
     controlled_call( $method, 'Other new list_id', 'Other new data_id', 'Some data', gettimeofday );
-} "expecting to die: ";
-is $coll->last_errorcode, $E_NETWORK, 'E_NETWORK';
+} "expecting to die: method = $method";
+is $coll->last_errorcode, $E_NO_ERROR, 'E_NO_ERROR';
 }
 
 my %statistics;

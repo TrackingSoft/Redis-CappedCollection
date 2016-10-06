@@ -169,13 +169,13 @@ $coll->max_datasize( $prev_max_datasize );
 
 #-- E_NETWORK
 
-$coll->quit;
+$coll->quit;    # see $coll->_use_external_connection
 
 eval { $info = $coll->collection_info };
 ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
-is $coll->last_errorcode, $E_NETWORK, "E_NETWORK";
+is $coll->last_errorcode, $E_NO_ERROR, "E_NO_ERROR";
 note '$@: ', $@;
-ok !$coll->_redis->ping, "server is not available";
+ok $coll->_redis->ping, "server is not available";
 
 new_connect();
 
