@@ -4083,10 +4083,10 @@ for all dependencies and compiling them manually).
 
 Redis server version 2.8 or higher is required.
 
-The use of C<maxmemory-police all*> in the F<redis.conf> file could lead to
+The use of C<maxmemory-policy all*> in the F<redis.conf> file could lead to
 a serious (and hard to detect) problem as Redis server may delete
 the collection element. Therefore the C<Redis::CappedCollection> does not work with
-mode C<maxmemory-police all*> in the F<redis.conf>.
+mode C<maxmemory-policy all*> in the F<redis.conf>.
 
 It may not be possible to use this module with the cluster of Redis servers
 because full name of some Redis keys may not be known at the time of the call
