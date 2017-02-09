@@ -238,7 +238,6 @@ The following values are used by default:
 const our $MIN_MEMORY_RESERVE   => 0.05;    # 5% memory reserve coefficient
 const our $MAX_MEMORY_RESERVE   => 0.5;     # 50% memory reserve coefficient
 
-
 =head3 $DEFAULT_CLEANUP_ITEMS
 
 Number of additional elements to delete from collection during cleanup procedure when collection size
@@ -435,6 +434,7 @@ const my $_ITEMS                        => 'items';
 const my $_OLDER_ALLOWED                => 'older_allowed';
 const my $_CLEANUP_BYTES                => 'cleanup_bytes';
 const my $_CLEANUP_ITEMS                => 'cleanup_items';
+const my $_MAX_LIST_ITEMS               => 'max_list_items';
 const my $_MEMORY_RESERVE               => 'memory_reserve';
 const my $_DATA_VERSION                 => 'data_version';
 const my $_LAST_REMOVED_TIME            => 'last_removed_time';
@@ -464,6 +464,7 @@ collectgarbage( 'stop' )
 __START_STEP__
 END_FIRST_STEP
 
+#--- log_work_function ---------------------------------------------------------
 my $_lua_log_work_function = <<"END_LOG_WORK_FUNCTION";
 local _SCRIPT_NAME
 local _DEBUG_LEVEL = tonumber( ARGV[1] )
@@ -484,6 +485,53 @@ local _log_work = function ( log_str, script_name )
 end
 END_LOG_WORK_FUNCTION
 
+#--- reduce_list_items ---------------------------------------------------------
+my $_lua_reduce_list_items = <<"END_REDUCE_LIST_ITEMS";
+local reduce_list_items = function ( list_id )
+    local max_list_items = tonumber( redis.call( 'HGET', STATUS_KEY, '$_MAX_LIST_ITEMS' ) )
+    if max_list_items ~= nil and max_list_items > 0 and redis.call( 'EXISTS', DATA_KEY ) == 1 then
+        local list_items        = redis.call( 'HLEN', DATA_KEY )
+        local older_allowed     = tonumber( redis.call( 'HGET', STATUS_KEY, '$_OLDER_ALLOWED' ) )
+        local last_removed_time = tonumber( redis.call( 'HGET', STATUS_KEY, '$_LAST_REMOVED_TIME' ) )
+
+        while list_items >= max_list_items do
+            local removed_data_time, removed_data_id
+            list_items = list_items - 1
+
+            if list_items == 0 then
+                removed_data_time = tonumber( redis.call( 'ZSCORE', QUEUE_KEY, list_id ) )
+                redis.call( 'ZREM', QUEUE_KEY, list_id )
+                redis.call( 'DEL', DATA_KEY )
+                redis.call( 'HINCRBY', STATUS_KEY, '$_LISTS', -1 )
+            else
+                removed_data_id, removed_data_time = unpack( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' ) )
+                removed_data_id     = tonumber( removed_data_id )
+                removed_data_time   = tonumber( removed_data_time )
+                redis.call( 'ZREM', TIME_KEY, removed_data_id )
+                redis.call( 'HDEL', DATA_KEY, removed_data_id )
+
+                local lowest_data_id, lowest_data_time = unpack( redis.call( 'ZRANGE', TIME_KEY, 0, 0, 'WITHSCORES' ) )
+                redis.call( 'ZADD', QUEUE_KEY, lowest_data_time, lowest_data_id )
+
+                if redis.call( 'HLEN', DATA_KEY ) == 1 then
+                    redis.call( 'DEL', TIME_KEY )
+                end
+            end
+
+            redis.call( 'HINCRBY', STATUS_KEY, '$_ITEMS', -1 )
+
+            if older_allowed == 0 and ( last_removed_time == 0 or removed_data_time < last_removed_time ) then
+                redis.call( 'HSET', STATUS_KEY, '$_LAST_REMOVED_TIME', removed_data_time )
+                last_removed_time = removed_data_time
+            end
+        end
+    end
+end
+
+reduce_list_items( list_id )
+END_REDUCE_LIST_ITEMS
+
+#--- clean_data ----------------------------------------------------------------
 my $_lua_clean_data = <<"END_CLEAN_DATA";
 -- remove the control structures of the collection
 if redis.call( 'EXISTS', QUEUE_KEY ) == 1 then
@@ -514,6 +562,7 @@ __FINISH_STEP__
 return ret
 END_CLEAN_DATA
 
+#--- cleaning ------------------------------------------------------------------
 my $_lua_cleaning = <<"END_CLEANING";
 local REDIS_USED_MEMORY                     = 0
 local REDIS_MAXMEMORY                       = 0
@@ -828,6 +877,7 @@ local call_with_error_control = function ( list_id, data_id, ... )
 end
 END_CLEANING
 
+#--- pre_upsert ----------------------------------------------------------------
 my $_lua_pre_upsert = <<"END_PRE_UPSERT";
 $_lua_first_step
 
@@ -854,6 +904,8 @@ if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     __FINISH_STEP__
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
+
+$_lua_reduce_list_items
 
 -- verification of the existence of old data with new data identifier
 if redis.call( 'HEXISTS', DATA_KEY, data_id ) == 1 then
@@ -923,18 +975,21 @@ __FINISH_STEP__
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_INSERT_BODY
 
+#--- insert --------------------------------------------------------------------
 $lua_script_body{insert} = <<"END_INSERT";
 -- adding data to a list of collections
 $_lua_pre_upsert
 $_lua_insert_body
 END_INSERT
 
+#--- update_body ---------------------------------------------------------------
 my $_lua_update_body = <<"END_UPDATE_BODY";
 -- determine whether there is a list of data and a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     __FINISH_STEP__
     return { $E_COLLECTION_DELETED, 0, 0, 0 }
 end
+
 if redis.call( 'EXISTS', DATA_KEY ) == 0 then
     __FINISH_STEP__
     return { $E_NONEXISTENT_DATA_ID, 0, 0, 0 }
@@ -1000,12 +1055,14 @@ __FINISH_STEP__
 return { $E_NO_ERROR, LAST_CLEANUP_ITEMS, REDIS_USED_MEMORY, TOTAL_BYTES_DELETED }
 END_UPDATE_BODY
 
+#--- update --------------------------------------------------------------------
 $lua_script_body{update} = <<"END_UPDATE";
 -- update the data in the list of collections
 $_lua_pre_upsert
 $_lua_update_body
 END_UPDATE
 
+#--- upsert --------------------------------------------------------------------
 $lua_script_body{upsert} = <<"END_UPSERT";
 -- update or insert the data in the list of collections
 $_lua_pre_upsert
@@ -1027,6 +1084,7 @@ else
 end
 END_UPSERT
 
+#--- receive -------------------------------------------------------------------
 $lua_script_body{receive} = <<"END_RECEIVE";
 -- returns the data from the list
 $_lua_first_step
@@ -1071,6 +1129,7 @@ __FINISH_STEP__
 return ret
 END_RECEIVE
 
+#--- pop_oldest ----------------------------------------------------------------
 $lua_script_body{pop_oldest} = <<"END_POP_OLDEST";
 -- retrieve the oldest data stored in the collection
 $_lua_first_step
@@ -1165,6 +1224,7 @@ __FINISH_STEP__
 return { $E_NO_ERROR, true, list_id, data }
 END_POP_OLDEST
 
+#--- collection_info -----------------------------------------------------------
 $lua_script_body{collection_info} = <<"END_COLLECTION_INFO";
 -- to obtain information on the status of the collection
 $_lua_first_step
@@ -1179,16 +1239,17 @@ $_lua_status_key
 -- determine whether there is a collection
 if redis.call( 'EXISTS', STATUS_KEY ) == 0 then
     __FINISH_STEP__
-    return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false }
+    return { $E_COLLECTION_DELETED, false, false, false, false, false, false, false, false }
 end
 
 local oldest_item_time = redis.call( 'ZRANGE', QUEUE_KEY, 0, 0, 'WITHSCORES' )[2]
-local lists, items, older_allowed, cleanup_bytes, cleanup_items, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
+local lists, items, older_allowed, cleanup_bytes, cleanup_items, max_list_items, memory_reserve, data_version, last_removed_time = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_LISTS',
         '$_ITEMS',
         '$_OLDER_ALLOWED',
         '$_CLEANUP_BYTES',
         '$_CLEANUP_ITEMS',
+        '$_MAX_LIST_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION',
         '$_LAST_REMOVED_TIME'
@@ -1204,6 +1265,7 @@ return {
     older_allowed,
     cleanup_bytes,
     cleanup_items,
+    max_list_items,
     memory_reserve,
     data_version,
     last_removed_time,
@@ -1211,6 +1273,7 @@ return {
 }
 END_COLLECTION_INFO
 
+#--- oldest_time ---------------------------------------------------------------
 $lua_script_body{oldest_time} = <<"END_OLDEST_TIME";
 -- to obtain time corresponding to the oldest data in the collection
 $_lua_first_step
@@ -1233,6 +1296,7 @@ __FINISH_STEP__
 return { $E_NO_ERROR, oldest_item_time }
 END_OLDEST_TIME
 
+#--- list_info -----------------------------------------------------------------
 $lua_script_body{list_info} = <<"END_LIST_INFO";
 -- to obtain information on the status of the data list
 $_lua_first_step
@@ -1267,6 +1331,7 @@ __FINISH_STEP__
 return { $E_NO_ERROR, items, oldest_item_time }
 END_LIST_INFO
 
+#--- drop_collection -----------------------------------------------------------
 $lua_script_body{drop_collection} = <<"END_DROP_COLLECTION";
 -- to remove the entire collection
 $_lua_first_step
@@ -1288,6 +1353,7 @@ end
 $_lua_clean_data
 END_DROP_COLLECTION
 
+#--- drop_collection -----------------------------------------------------------
 $lua_script_body{clear_collection} = <<"END_CLEAR_COLLECTION";
 -- to remove the entire collection data
 $_lua_first_step
@@ -1311,6 +1377,7 @@ redis.call( 'HMSET', STATUS_KEY,
 $_lua_clean_data
 END_CLEAR_COLLECTION
 
+#--- drop_list -----------------------------------------------------------------
 $lua_script_body{drop_list} = <<"END_DROP_LIST";
 -- to remove the data_list
 $_lua_first_step
@@ -1362,6 +1429,7 @@ __FINISH_STEP__
 return { $E_NO_ERROR, 1 }
 END_DROP_LIST
 
+#--- verify_collection ---------------------------------------------------------
 $lua_script_body{verify_collection} = <<"END_VERIFY_COLLECTION";
 -- creation of the collection and characterization of the collection by accessing existing collection
 $_lua_first_step
@@ -1370,7 +1438,8 @@ local coll_name         = ARGV[2]
 local older_allowed     = ARGV[3]
 local cleanup_bytes     = ARGV[4]
 local cleanup_items     = ARGV[5]
-local memory_reserve    = ARGV[6]
+local max_list_items    = ARGV[6]
+local memory_reserve    = ARGV[7]
 
 local data_version = '$DATA_VERSION'
 
@@ -1383,10 +1452,11 @@ local status_exist = redis.call( 'EXISTS', STATUS_KEY )
 
 if status_exist == 1 then
 -- if there is a collection
-    older_allowed, cleanup_bytes, cleanup_items, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
+    older_allowed, cleanup_bytes, cleanup_items, max_list_items, memory_reserve, data_version = unpack( redis.call( 'HMGET', STATUS_KEY,
         '$_OLDER_ALLOWED',
         '$_CLEANUP_BYTES',
         '$_CLEANUP_ITEMS',
+        '$_MAX_LIST_ITEMS',
         '$_MEMORY_RESERVE',
         '$_DATA_VERSION'
     ) )
@@ -1400,6 +1470,7 @@ else
         '$_OLDER_ALLOWED',      older_allowed,
         '$_CLEANUP_BYTES',      cleanup_bytes,
         '$_CLEANUP_ITEMS',      cleanup_items,
+        '$_MAX_LIST_ITEMS',     max_list_items,
         '$_MEMORY_RESERVE',     memory_reserve,
         '$_DATA_VERSION',       data_version,
         '$_LAST_REMOVED_TIME',  0,
@@ -1419,6 +1490,7 @@ return {
 }
 END_VERIFY_COLLECTION
 
+#--- long_term_operation -------------------------------------------------------
 $lua_script_body{_long_term_operation} = <<"END_LONG_TERM_OPERATION";
 $_lua_first_step
 
@@ -1500,13 +1572,14 @@ C<create> takes arguments in key-value pairs.
 This example illustrates a C<create()> call with all the valid arguments:
 
     my $coll = Redis::CappedCollection->create(
-        redis   => { server => "$server:$port" },   # Redis object
+        redis           => { server => "$server:$port" },   # Redis object
                         # or hash reference to parameters to create a new Redis object.
-        name    => 'Some name', # Redis::CappedCollection collection name.
-        cleanup_bytes => 50_000,    # The minimum size, in bytes,
+        name            => 'Some name', # Redis::CappedCollection collection name.
+        cleanup_bytes   => 50_000,  # The minimum size, in bytes,
                         # of the data to be released when performing memory cleanup.
-        cleanup_items => 1_000,     # The minimum number of the collection
+        cleanup_items   => 1_000,   # The minimum number of the collection
                         # elements to be realesed when performing memory cleanup.
+        max_list_items  => 0, # Maximum list items limit
         max_datasize    => 1_000_000,   # Maximum size, in bytes, of the data.
                         # Default 512MB.
         older_allowed   => 0, # Allow adding an element to collection that's older
@@ -1688,6 +1761,7 @@ my @_status_parameters = qw(
     older_allowed
     cleanup_bytes
     cleanup_items
+    max_list_items
     memory_reserve
 );
 
@@ -1882,6 +1956,23 @@ has cleanup_items       => (
     writer      => '_set_cleanup_items',
     isa         => __PACKAGE__.'::NonNegInt',
     default     => 100,
+);
+
+=head3 max_list_items
+
+Maximum list items limit.
+
+Default 0 means that number of list items not limited.
+
+The C<max_list_items> attribute value can be used in the L<constructor|/CONSTRUCTOR>.
+The method returns and sets the current value of the attribute.
+
+=cut
+has max_list_items      => (
+    is          => 'rw',
+    writer      => '_set_max_list_items',
+    isa         => __PACKAGE__.'::NonNegInt',
+    default     => 0,
 );
 
 =head3 max_datasize
@@ -2501,6 +2592,10 @@ to be realesed when performing memory cleanup.
 
 =item *
 
+C<max_list_items> - Maximum list items limit.
+
+=item *
+
 C<data_version> - Data structure version.
 
 =item *
@@ -2521,6 +2616,7 @@ my @_collection_info_result_keys = qw(
     older_allowed
     cleanup_bytes
     cleanup_items
+    max_list_items
     memory_reserve
     data_version
     last_removed_time
@@ -2905,13 +3001,16 @@ sub resize {
         if ( exists $arguments{ $parameter } ) {
             if ( $parameter eq 'cleanup_bytes' || $parameter eq 'cleanup_items' ) {
                 _croak( "'$parameter' must be nonnegative integer" )
-                    unless _NONNEGINT( $arguments{ $parameter } );
+                    unless defined( _NONNEGINT( $arguments{ $parameter } ) );
             } elsif ( $parameter eq 'memory_reserve' ) {
                 my $memory_reserve = $arguments{ $parameter };
                 _croak( format_message( "'%s' must have a valid value", $parameter ) )
                     unless _NUMBER( $memory_reserve ) && $memory_reserve >= $MIN_MEMORY_RESERVE && $memory_reserve <= $MAX_MEMORY_RESERVE;
             } elsif ( $parameter eq 'older_allowed' ) {
                 $arguments{ $parameter } = $arguments{ $parameter } ? 1 :0;
+            } elsif ( $parameter eq 'max_list_items' ) {
+                _croak( "'$parameter' must be nonnegative integer" )
+                    unless defined( _NONNEGINT( $arguments{ $parameter } ) );
             }
 
             my $ret = 0;
@@ -2930,6 +3029,8 @@ sub resize {
                         $self->_set_cleanup_items( $new_val );
                     } elsif ( $parameter eq 'memory_reserve' ) {
                         $self->_set_memory_reserve( $new_val );
+                    } elsif ( $parameter eq 'max_list_items' ) {
+                        $self->_set_max_list_items( $new_val );
                     } else {
                         $self->$parameter( $new_val );
                     }
@@ -3407,7 +3508,7 @@ sub _verify_collection {
 
     $self->_set_last_errorcode( $E_NO_ERROR );
 
-    my ( $status_exist, $older_allowed, $cleanup_bytes, $cleanup_items, $memory_reserve, $data_version ) = $self->_call_redis(
+    my ( $status_exist, $older_allowed, $cleanup_bytes, $cleanup_items, $max_list_items, $memory_reserve, $data_version ) = $self->_call_redis(
         $self->_lua_script_cmd( 'verify_collection' ),
         0,
         $DEBUG,
@@ -3415,12 +3516,14 @@ sub _verify_collection {
         $self->older_allowed ? 1 : 0,
         $self->cleanup_bytes || 0,
         $self->cleanup_items || 0,
+        $self->max_list_items || 0,
         $self->memory_reserve || $MIN_MEMORY_RESERVE,
     );
 
     if ( $status_exist ) {
-        $self->cleanup_bytes( $cleanup_bytes )  unless $self->cleanup_bytes;
-        $self->cleanup_items( $cleanup_items )  unless $self->cleanup_items;
+        $self->cleanup_bytes( $cleanup_bytes )      unless $self->cleanup_bytes;
+        $self->cleanup_items( $cleanup_items )      unless $self->cleanup_items;
+        $max_list_items == $self->max_list_items    or $self->_throw( $E_MISMATCH_ARG, 'max_list_items' );
         $older_allowed  == $self->older_allowed     or $self->_throw( $E_MISMATCH_ARG, 'older_allowed' );
         $cleanup_bytes  == $self->cleanup_bytes     or $self->_throw( $E_MISMATCH_ARG, 'cleanup_bytes' );
         $cleanup_items  == $self->cleanup_items     or $self->_throw( $E_MISMATCH_ARG, 'cleanup_items' );
@@ -3990,13 +4093,15 @@ CappedCollection package creates the following data structures on Redis:
     7) "cleanup_bytes"      # hash key
     8) "0"                  # the key value
     9) "cleanup_items"      # hash key
-    10) "100"               # the key value
-    11) "memory_reserve"    # hash key
-    12) "0.05"              # the key value
-    13) "data_version"      # hash key
-    14) "3"                 # the key value
-    15) "last_removed_time" # hash key
-    16) "0"                 # the key value
+    10) "0"                  # the key value
+    11) "max_list_items"     # hash key
+    12) "100"               # the key value
+    13) "memory_reserve"    # hash key
+    14) "0.05"              # the key value
+    15) "data_version"      # hash key
+    16) "3"                 # the key value
+    17) "last_removed_time" # hash key
+    18) "0"                 # the key value
     ...
 
     #-- To store collection queue:
@@ -4020,7 +4125,6 @@ CappedCollection package creates the following data structures on Redis:
     ...
 
     #-- To store CappedCollection data:
-    # HASH    Namespace:I:Collection_id:DataList_id
     # HASH    Namespace:D:Collection_id:DataList_id
     # If the amount of data in the list is greater than 1
     # ZSET    Namespace:T:Collection_id:DataList_id

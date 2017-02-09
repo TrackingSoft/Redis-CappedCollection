@@ -76,6 +76,7 @@ ok !$coll->_call_redis( "EXISTS", $queue_key ), "queue list not created";
 $info = Redis::CappedCollection::collection_info( redis => $coll->_redis, name => $coll->name );
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
+is $info->{max_list_items},     0,      "OK max_list_items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
@@ -83,6 +84,7 @@ is $info->{data_version},       $DATA_VERSION, 'OK data_version';
 $info = Redis::CappedCollection::collection_info( redis => { server => $coll->_server }, name => $coll->name );
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
+is $info->{max_list_items},     0,      "OK max_list_items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
@@ -91,6 +93,7 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 $info = Redis::CappedCollection->collection_info( redis => $coll->_redis, name => $coll->name );
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
+is $info->{max_list_items},     0,      "OK max_list_items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $info->{data_version},       $DATA_VERSION, 'OK data_version';
@@ -99,6 +102,7 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 $info = $coll->collection_info;
 is $info->{lists},              0,      "OK lists";
 is $info->{items},              0,      "OK items";
+is $info->{max_list_items},     0,      "OK max_list_items";
 is $info->{older_allowed},      0,      "OK older_allowed";             # default
 is $info->{oldest_time},        undef,  "OK oldest_time";
 is $coll->oldest_time,          undef,  "OK oldest_time";
@@ -154,6 +158,7 @@ foreach my $i ( 1..10 )
     $info = $coll->collection_info;
     is $info->{lists},  $i, "OK lists";
     is $info->{items},  $i, "OK items";
+    is $info->{max_list_items}, 0, "OK max_list_items";
     ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
 }
 
@@ -170,8 +175,9 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 $coll->_call_redis( "DEL", $_ ) foreach $coll->_call_redis( "KEYS", $NAMESPACE.":*" );
 
 $coll = Redis::CappedCollection->create(
-    redis   => $redis,
-    name    => $uuid->create_str,
+    redis           => $redis,
+    name            => $uuid->create_str,
+    max_list_items  => 1_000_000,
     );
 isa_ok( $coll, 'Redis::CappedCollection' );
 ok $coll->_server =~ /.+:$port$/, $msg;
@@ -191,6 +197,7 @@ $info = $coll->collection_info;
 is $info->{lists},  1, "OK lists";
 is $info->{items},  9, "OK items";
 ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
+is $info->{max_list_items}, 1_000_000, "OK max_list_items";
 
 $tmp = $coll->update( "bad_id", 0, '*' );
 ok !$tmp, "not updated";
@@ -212,6 +219,12 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 ok $coll->resize( older_allowed => 1 ), 'resized';
 $info = $coll->collection_info;
 ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time} >= 0, 'last_removed_time OK';
+ok $coll->resize( max_list_items => 10_000 ), 'resized';
+$info = $coll->collection_info;
+ok defined( _NUMBER( $info->{max_list_items} ) ) && $info->{max_list_items} == 10_000, 'max_list_items OK';
+ok $coll->resize( max_list_items => 0 ), 'resized';
+$info = $coll->collection_info;
+ok defined( _NUMBER( $info->{max_list_items} ) ) && $info->{max_list_items} == 0, 'max_list_items OK';
 
 is $info->{older_allowed},      1,      "OK older_allowed";
 $coll->pop_oldest;
@@ -230,6 +243,8 @@ ok defined( _NUMBER( $info->{last_removed_time} ) ) && $info->{last_removed_time
 dies_ok { $coll->resize() } "expecting to die";
 ok( Redis::CappedCollection->resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
 ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, older_allowed => 0 ), 'resized' );
+ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, max_list_items => 10 ), 'resized' );
+ok( Redis::CappedCollection::resize( redis => $coll->_redis, name => $coll->name, max_list_items => 0 ), 'resized' );
 dies_ok { $coll->resize() } "expecting to die";
 dies_ok { Redis::CappedCollection->resize() } "expecting to die";
 
