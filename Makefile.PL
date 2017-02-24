@@ -38,15 +38,19 @@ my %config = (
         provides                => {
             'Redis::CappedCollection'   => {
                 file                        => 'lib/Redis/CappedCollection.pm',
-                version                     => '1.09'
+                version                     => '1.10'
             },
             'Redis::CappedCollection::Util' => {
                 file                        => 'lib/Redis/CappedCollection/Util.pm',
-                version                     => '1.09'
+                version                     => '1.10'
             },
         },
         'meta-spec'             => { version => 2 },
         resources               => {
+            bugtracker              => {
+               web                      => 'https://github.com/TrackingSoft/Redis-CappedCollection/issues',
+            },
+            homepage                => 'https://github.com/TrackingSoft/Redis-CappedCollection',
             repository              => {
                 type                    => 'git',
                 url                     => 'git://github.com/TrackingSoft/Redis-CappedCollection.git',

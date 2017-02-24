@@ -7,7 +7,7 @@ Redis server setting) collections with FIFO data removal.
 
 =head1 VERSION
 
-This documentation refers to C<Redis::CappedCollection> version 1.09
+This documentation refers to C<Redis::CappedCollection> version 1.10
 
 =cut
 
@@ -20,7 +20,7 @@ use bytes;
 
 # ENVIRONMENT ------------------------------------------------------------------
 
-our $VERSION = '1.09';
+our $VERSION = '1.10';
 
 use Exporter qw(
     import
@@ -4273,6 +4273,8 @@ L<https://github.com/TrackingSoft/Redis-CappedCollection>
 =head1 AUTHOR
 
 Sergey Gladkov, E<lt>sgladkov@trackingsoft.comE<gt>
+
+Please use GitHub project link above to report problems or contact authors.
 
 =head1 CONTRIBUTORS
 
